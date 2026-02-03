@@ -5,7 +5,7 @@ import { createClient } from "@/utils/supabase/client"
 import {
     Package,
     AlertCircle,
-    DollarSign,
+    IndianRupee,
     BarChart3,
     Search,
     Plus,
@@ -37,6 +37,7 @@ export default function InventoryPage() {
     const [products, setProducts] = useState<any[]>([])
     const [pendingOrders, setPendingOrders] = useState<any[]>([])
     const [searchQuery, setSearchQuery] = useState("")
+    const [userRole, setUserRole] = useState<string>('warehouse_staff')
 
     useEffect(() => {
         const fetchData = async () => {
@@ -67,6 +68,19 @@ export default function InventoryPage() {
                 .neq('status', 'received')
                 .order('date', { ascending: false })
             setPendingOrders(oData || [])
+
+            // 4. Resolve Role
+            const { data: { user } } = await supabase.auth.getUser()
+            if (user) {
+                const { data: emp } = await supabase.from('employees').select('role_id').eq('user_id', user.id).single()
+                if (emp?.role_id) {
+                    const { data: roleRec } = await supabase.from('roles').select('role_name').eq('role_id', emp.role_id).single()
+                    if (roleRec?.role_name === 'Administrator') setUserRole('admin')
+                    else if (roleRec?.role_name === 'Warehouse Manager') setUserRole('manager')
+                    else if (roleRec?.role_name === 'Sales Representative') setUserRole('sales_representative')
+                    else if (roleRec?.role_name) setUserRole(roleRec.role_name.toLowerCase().replace(/ /g, '_'))
+                }
+            }
 
             setLoading(false)
         }
@@ -148,7 +162,7 @@ export default function InventoryPage() {
             </div>
 
             {/* Premium Stats Grid */}
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+            <div className={`grid gap-6 md:grid-cols-2 ${userRole === 'sales_representative' ? 'lg:grid-cols-1' : 'lg:grid-cols-4'}`}>
                 <Card className="relative overflow-hidden group hover:shadow-md transition-all border-l-4 border-l-primary">
                     <CardContent className="p-6">
                         <div className="flex items-center justify-between mb-2">
@@ -162,48 +176,54 @@ export default function InventoryPage() {
                     </CardContent>
                 </Card>
 
-                <Card className="relative overflow-hidden group hover:shadow-md transition-all border-l-4 border-l-emerald-500">
-                    <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Asset Value</span>
-                            <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-600"><DollarSign className="h-4 w-4" /></div>
-                        </div>
-                        <div className="text-3xl font-black">${totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                        <div className="text-[10px] text-emerald-600 mt-1 flex items-center gap-1">
-                            <ArrowUpRight className="h-3 w-3" /> Market Valuation
-                        </div>
-                    </CardContent>
-                </Card>
+                {userRole !== 'sales_representative' && (
+                    <>
+                        <Card className="relative overflow-hidden group hover:shadow-md transition-all border-l-4 border-l-emerald-500">
+                            <CardContent className="p-6">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Asset Value</span>
+                                    <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-600"><IndianRupee className="h-4 w-4" /></div>
+                                </div>
+                                <div className="text-3xl font-black">₹{totalValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
+                                <div className="text-[10px] text-emerald-600 mt-1 flex items-center gap-1">
+                                    <ArrowUpRight className="h-3 w-3" /> Market Valuation
+                                </div>
+                            </CardContent>
+                        </Card>
 
-                <Card className="relative overflow-hidden group hover:shadow-md transition-all border-l-4 border-l-amber-500">
-                    <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Stock Critical</span>
-                            <div className="p-2 bg-amber-500/10 rounded-lg text-amber-600"><AlertCircle className="h-4 w-4" /></div>
-                        </div>
-                        <div className="text-3xl font-black">{lowStockCount}</div>
-                        <div className="text-[10px] text-amber-600 mt-1 flex items-center gap-1">
-                            Below 10 unit threshold
-                        </div>
-                    </CardContent>
-                </Card>
+                        <Card className="relative overflow-hidden group hover:shadow-md transition-all border-l-4 border-l-amber-500">
+                            <CardContent className="p-6">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Stock Critical</span>
+                                    <div className="p-2 bg-amber-500/10 rounded-lg text-amber-600"><AlertCircle className="h-4 w-4" /></div>
+                                </div>
+                                <div className="text-3xl font-black">{lowStockCount}</div>
+                                <div className="text-[10px] text-amber-600 mt-1 flex items-center gap-1">
+                                    Below 10 unit threshold
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </>
+                )}
 
-                <Card className="relative overflow-hidden group hover:shadow-md transition-all border-l-4 border-l-indigo-500">
-                    <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Pipeline</span>
-                            <div className="p-2 bg-indigo-500/10 rounded-lg text-indigo-600"><Clock className="h-4 w-4" /></div>
-                        </div>
-                        <div className="text-3xl font-black">{pendingOrderCount}</div>
-                        <div className="text-[10px] text-indigo-600 mt-1 flex items-center gap-1">
-                            Incoming Shipments
-                        </div>
-                    </CardContent>
-                </Card>
+                {userRole !== 'sales_representative' && (
+                    <Card className="relative overflow-hidden group hover:shadow-md transition-all border-l-4 border-l-indigo-500">
+                        <CardContent className="p-6">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Pipeline</span>
+                                <div className="p-2 bg-indigo-500/10 rounded-lg text-indigo-600"><Clock className="h-4 w-4" /></div>
+                            </div>
+                            <div className="text-3xl font-black">{pendingOrderCount}</div>
+                            <div className="text-[10px] text-indigo-600 mt-1 flex items-center gap-1">
+                                Incoming Shipments
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
             </div>
 
             {/* Main Content Layout */}
-            <div className="grid gap-8 lg:grid-cols-3">
+            <div className={`grid gap-8 ${userRole === 'sales_representative' ? 'grid-cols-1' : 'lg:grid-cols-3'}`}>
                 {/* Product Catalog */}
                 <div className="lg:col-span-2 space-y-4">
                     <div className="flex items-center justify-between">
@@ -230,7 +250,9 @@ export default function InventoryPage() {
                                     <tr className="text-left py-4">
                                         <th className="px-6 py-4 font-bold text-muted-foreground uppercase text-[10px] tracking-wider">Product & Spec</th>
                                         <th className="px-6 py-4 font-bold text-muted-foreground uppercase text-[10px] tracking-wider text-right">Available</th>
-                                        <th className="px-6 py-4 font-bold text-muted-foreground uppercase text-[10px] tracking-wider text-right">Unit Price</th>
+                                        {userRole !== 'sales_representative' && (
+                                            <th className="px-6 py-4 font-bold text-muted-foreground uppercase text-[10px] tracking-wider text-right">Unit Price</th>
+                                        )}
                                         <th className="px-6 py-4 font-bold text-muted-foreground uppercase text-[10px] tracking-wider text-center">Location</th>
                                     </tr>
                                 </thead>
@@ -250,13 +272,15 @@ export default function InventoryPage() {
                                                 </div>
                                             </td>
                                             <td className="px-6 py-4 text-right">
-                                                <div className={`text-lg font-black ${p.currentStock < 10 ? 'text-red-500' : p.currentStock < 50 ? 'text-amber-500' : 'text-foreground'}`}>
+                                                <div className={`text-lg font-black ${p.currentStock < 10 && userRole !== 'sales_representative' ? 'text-red-500' : p.currentStock < 50 && userRole !== 'sales_representative' ? 'text-amber-500' : 'text-foreground'}`}>
                                                     {p.currentStock}
                                                 </div>
                                             </td>
-                                            <td className="px-6 py-4 text-right">
-                                                <div className="font-mono font-bold">${Number(p.unit_price).toFixed(2)}</div>
-                                            </td>
+                                            {userRole !== 'sales_representative' && (
+                                                <td className="px-6 py-4 text-right">
+                                                    <div className="font-mono font-bold">₹{Number(p.unit_price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                                </td>
+                                            )}
                                             <td className="px-6 py-4">
                                                 <div className="flex flex-wrap gap-1 justify-center">
                                                     {p.product_warehouse?.map((pw: any) => (
@@ -285,53 +309,41 @@ export default function InventoryPage() {
                 </div>
 
                 {/* Sidebar: Pipeline & Orders */}
-                <div className="space-y-6">
-                    <div>
-                        <h2 className="text-xl font-bold flex items-center gap-2 mb-4">
-                            Pipeline <span className="text-xs font-normal text-muted-foreground bg-indigo-500/10 text-indigo-600 px-2 py-0.5 rounded-full">Coming Soon</span>
-                        </h2>
-                        <div className="space-y-3">
-                            {filteredOrders.length > 0 ? filteredOrders.map(o => (
-                                <Card key={o.po_id} className="border-none shadow bg-card overflow-hidden">
-                                    <CardContent className="p-4">
-                                        <div className="flex justify-between items-start mb-2">
-                                            <div className="font-bold text-xs truncate max-w-[150px]">{o.products?.p_name}</div>
-                                            <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-600 border border-indigo-500/10">
-                                                {o.status}
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                                            <span>Qty: <span className="text-foreground font-bold">{o.quantity}</span></span>
-                                            <span>To: <span className="text-foreground font-bold">{o.warehouses?.w_name?.split('-')[0]}</span></span>
-                                        </div>
-                                        <div className="mt-2 pt-2 border-t border-dashed text-[9px] text-muted-foreground flex items-center justify-between">
-                                            <span>From: {o.suppliers?.s_name}</span>
-                                            <span className="font-mono">${Number(o.price || 0).toLocaleString()}</span>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            )) : (
-                                <div className="text-center py-10 border rounded-lg border-dashed">
-                                    <p className="text-xs text-muted-foreground">No pending shipments.</p>
-                                </div>
-                            )}
+                {userRole !== 'sales_representative' && (
+                    <div className="space-y-6">
+                        <div>
+                            <h2 className="text-xl font-bold flex items-center gap-2 mb-4">
+                                Pipeline <span className="text-xs font-normal text-muted-foreground bg-indigo-500/10 text-indigo-600 px-2 py-0.5 rounded-full">Coming Soon</span>
+                            </h2>
+                            <div className="space-y-3">
+                                {filteredOrders.length > 0 ? filteredOrders.map(o => (
+                                    <Card key={o.po_id} className="border-none shadow bg-card overflow-hidden">
+                                        <CardContent className="p-4">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <div className="font-bold text-xs truncate max-w-[150px]">{o.products?.p_name}</div>
+                                                <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-600 border border-indigo-500/10">
+                                                    {o.status}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                                <span>Qty: <span className="text-foreground font-bold">{o.quantity}</span></span>
+                                                <span>To: <span className="text-foreground font-bold">{o.warehouses?.w_name?.split('-')[0]}</span></span>
+                                            </div>
+                                            <div className="mt-2 pt-2 border-t border-dashed text-[9px] text-muted-foreground flex items-center justify-between">
+                                                <span>From: {o.suppliers?.s_name}</span>
+                                                <span className="font-mono">₹{Number(o.price || 0).toLocaleString('en-IN')}</span>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                )) : (
+                                    <div className="text-center py-10 border rounded-lg border-dashed">
+                                        <p className="text-xs text-muted-foreground">No pending shipments.</p>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
-
-                    <Card className="bg-indigo-600 text-indigo-50 border-none shadow-xl">
-                        <CardHeader className="p-6">
-                            <CardTitle className="text-lg font-black">Stock Analysis</CardTitle>
-                            <CardDescription className="text-indigo-200 text-xs text-pretty italic">
-                                "The currently filtered view shows a {lowStockCount > 0 ? 'critical' : 'healthy'} inventory state. High value assets are concentrated in the processors segment."
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="px-6 pb-6 pt-0">
-                            <Button variant="secondary" className="w-full text-indigo-600 font-bold text-xs uppercase tracking-widest h-10">
-                                Full Audit Report
-                            </Button>
-                        </CardContent>
-                    </Card>
-                </div>
+                )}
             </div>
         </div>
     )

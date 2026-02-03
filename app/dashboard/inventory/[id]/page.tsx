@@ -14,7 +14,7 @@ import {
     ArrowUpCircle,
     ArrowDownCircle,
     Boxes,
-    DollarSign,
+    IndianRupee,
     Zap
 } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
@@ -188,6 +188,7 @@ export default function ProductAnalyticsPage({ params: paramsPromise }: { params
     const [warehouseOutgoing, setWarehouseOutgoing] = useState<any[]>([])
     const [pendingOrders, setPendingOrders] = useState<any[]>([])
     const [graphData, setGraphData] = useState<{ nodes: any[], edges: any[] }>({ nodes: [], edges: [] })
+    const [userRole, setUserRole] = useState<string>('warehouse_staff')
 
     useEffect(() => {
         fetchAnalyticsData()
@@ -327,6 +328,19 @@ export default function ProductAnalyticsPage({ params: paramsPromise }: { params
                 nodes: Array.from(nodesMap.values()),
                 edges: Array.from(edgesMap.values())
             })
+
+            // 7. Resolve Role
+            const { data: { user } } = await supabase.auth.getUser()
+            if (user) {
+                const { data: emp } = await supabase.from('employees').select('role_id').eq('user_id', user.id).single()
+                if (emp?.role_id) {
+                    const { data: roleRec } = await supabase.from('roles').select('role_name').eq('role_id', emp.role_id).single()
+                    if (roleRec?.role_name === 'Administrator') setUserRole('admin')
+                    else if (roleRec?.role_name === 'Warehouse Manager') setUserRole('manager')
+                    else if (roleRec?.role_name === 'Sales Representative') setUserRole('sales_representative')
+                    else if (roleRec?.role_name) setUserRole(roleRec.role_name.toLowerCase().replace(/ /g, '_'))
+                }
+            }
         }
 
         setLoading(false)
@@ -369,119 +383,131 @@ export default function ProductAnalyticsPage({ params: paramsPromise }: { params
             </div>
 
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-                <Card className="bg-indigo-600 border-none shadow-xl text-white overflow-hidden relative">
-                    <CardContent className="p-6">
-                        <Activity className="absolute -right-4 -bottom-4 h-24 w-24 text-white/10" />
-                        <CardTitle className="text-xs uppercase font-black tracking-widest text-indigo-200">Total Activity</CardTitle>
-                        <div className="text-4xl font-black mt-2">{stats.frequency}</div>
-                        <p className="text-[10px] font-bold text-indigo-200 mt-1 uppercase tracking-tighter">Recorded Movements</p>
-                    </CardContent>
-                </Card>
+                {userRole !== 'sales_representative' && (
+                    <Card className="bg-indigo-600 border-none shadow-xl text-white overflow-hidden relative">
+                        <CardContent className="p-6">
+                            <Activity className="absolute -right-4 -bottom-4 h-24 w-24 text-white/10" />
+                            <CardTitle className="text-xs uppercase font-black tracking-widest text-indigo-200">Total Activity</CardTitle>
+                            <div className="text-4xl font-black mt-2">{stats.frequency}</div>
+                            <p className="text-[10px] font-bold text-indigo-200 mt-1 uppercase tracking-tighter">Recorded Movements</p>
+                        </CardContent>
+                    </Card>
+                )}
 
-                <Card className="border-l-4 border-l-emerald-500 shadow-lg">
-                    <CardContent className="p-6">
-                        <CardTitle className="text-xs uppercase font-black tracking-widest text-muted-foreground">Procurement Vol.</CardTitle>
-                        <div className="text-4xl font-black mt-2 text-emerald-600">{stats.incoming}</div>
-                        <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold mt-1 uppercase">
-                            <ArrowUpCircle className="h-3 w-3" /> Incoming Velocity
-                        </div>
-                    </CardContent>
-                </Card>
+                {userRole !== 'sales_representative' && (
+                    <Card className="border-l-4 border-l-emerald-500 shadow-lg">
+                        <CardContent className="p-6">
+                            <CardTitle className="text-xs uppercase font-black tracking-widest text-muted-foreground">Procurement Vol.</CardTitle>
+                            <div className="text-4xl font-black mt-2 text-emerald-600">{stats.incoming}</div>
+                            <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold mt-1 uppercase">
+                                <ArrowUpCircle className="h-3 w-3" /> Incoming Velocity
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
 
-                <Card className="border-l-4 border-l-rose-500 shadow-lg">
-                    <CardContent className="p-6">
-                        <CardTitle className="text-xs uppercase font-black tracking-widest text-muted-foreground">Outgoing Rate</CardTitle>
-                        <div className="text-4xl font-black mt-2 text-rose-600">{stats.outgoing}</div>
-                        <div className="flex items-center gap-1 text-[10px] text-rose-600 font-bold mt-1 uppercase">
-                            <ArrowDownCircle className="h-3 w-3" /> Consumption Velocity
-                        </div>
-                    </CardContent>
-                </Card>
+                {userRole !== 'sales_representative' && (
+                    <Card className="border-l-4 border-l-rose-500 shadow-lg">
+                        <CardContent className="p-6">
+                            <CardTitle className="text-xs uppercase font-black tracking-widest text-muted-foreground">Outgoing Rate</CardTitle>
+                            <div className="text-4xl font-black mt-2 text-rose-600">{stats.outgoing}</div>
+                            <div className="flex items-center gap-1 text-[10px] text-rose-600 font-bold mt-1 uppercase">
+                                <ArrowDownCircle className="h-3 w-3" /> Consumption Velocity
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
 
-                <Card className="border-l-4 border-l-amber-500 shadow-lg">
-                    <CardContent className="p-6">
-                        <CardTitle className="text-xs uppercase font-black tracking-widest text-muted-foreground">Avg. Movement</CardTitle>
-                        <div className="text-4xl font-black mt-2 text-amber-600">
-                            {((stats.incoming + stats.outgoing) / (stats.frequency || 1)).toFixed(1)}
-                        </div>
-                        <div className="flex items-center gap-1 text-[10px] text-amber-600 font-bold mt-1 uppercase tracking-tighter">
-                            Units per transaction
-                        </div>
-                    </CardContent>
-                </Card>
+                {userRole !== 'sales_representative' && (
+                    <Card className="border-l-4 border-l-amber-500 shadow-lg">
+                        <CardContent className="p-6">
+                            <CardTitle className="text-xs uppercase font-black tracking-widest text-muted-foreground">Avg. Movement</CardTitle>
+                            <div className="text-4xl font-black mt-2 text-amber-600">
+                                {((stats.incoming + stats.outgoing) / (stats.frequency || 1)).toFixed(1)}
+                            </div>
+                            <div className="flex items-center gap-1 text-[10px] text-amber-600 font-bold mt-1 uppercase tracking-tighter">
+                                Units per transaction
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
             </div>
 
             {/* Charts Section - Bento Grid */}
             <div className="grid gap-6 lg:grid-cols-2">
 
-                {/* 1. Velocity Trends (Existing) */}
-                <Card className="shadow-lg bg-card/60 backdrop-blur border-none">
-                    <CardHeader className="border-b border-muted/30 pb-4">
-                        <CardTitle className="text-sm font-black uppercase tracking-[0.2em] flex items-center gap-2">
-                            <TrendingUp className="h-4 w-4 text-indigo-600" /> Velocity Trends
-                        </CardTitle>
-                        <CardDescription>Incoming vs consumption units over time.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="pt-8 pl-0 h-[300px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={stats.chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                                <defs>
-                                    <linearGradient id="colorIn" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.1} />
-                                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                                    </linearGradient>
-                                    <linearGradient id="colorOut" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.1} />
-                                        <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#88888820" />
-                                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} />
-                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} />
-                                <Tooltip
-                                    contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', border: 'none' }}
-                                    itemStyle={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}
-                                />
-                                <Area type="monotone" dataKey="in" stroke="#10b981" fillOpacity={1} fill="url(#colorIn)" strokeWidth={3} />
-                                <Area type="monotone" dataKey="out" stroke="#f43f5e" fillOpacity={1} fill="url(#colorOut)" strokeWidth={3} />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </CardContent>
-                </Card>
-
-                {/* 2. Price History Chart (New) */}
-                <Card className="shadow-lg bg-card/60 backdrop-blur border-none">
-                    <CardHeader className="border-b border-muted/30 pb-4">
-                        <CardTitle className="text-sm font-black uppercase tracking-[0.2em] flex items-center gap-2">
-                            <DollarSign className="h-4 w-4 text-emerald-600" /> Price Volatility
-                        </CardTitle>
-                        <CardDescription>Unit cost history based on recent procurement orders.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="pt-8 pl-0 h-[300px]">
-                        {priceHistory.length > 0 ? (
+                {/* 1. Velocity Trends (Hidden for Sales Rep) */}
+                {userRole !== 'sales_representative' && (
+                    <Card className="shadow-lg bg-card/60 backdrop-blur border-none">
+                        <CardHeader className="border-b border-muted/30 pb-4">
+                            <CardTitle className="text-sm font-black uppercase tracking-[0.2em] flex items-center gap-2">
+                                <TrendingUp className="h-4 w-4 text-indigo-600" /> Velocity Trends
+                            </CardTitle>
+                            <CardDescription>Incoming vs consumption units over time.</CardDescription>
+                        </CardHeader>
+                        <CardContent className="pt-8 pl-0 h-[300px]">
                             <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={priceHistory} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                                <AreaChart data={stats.chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                                    <defs>
+                                        <linearGradient id="colorIn" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.1} />
+                                            <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                        </linearGradient>
+                                        <linearGradient id="colorOut" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.1} />
+                                            <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#88888820" />
                                     <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} />
-                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} domain={['auto', 'auto']} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} />
                                     <Tooltip
                                         contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', border: 'none' }}
-                                        itemStyle={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#059669' }}
-                                        formatter={(value: any) => [`$${value}`, 'Unit Cost']}
+                                        itemStyle={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}
                                     />
-                                    <Line type="stepAfter" dataKey="price" stroke="#059669" strokeWidth={3} dot={{ r: 4, fill: '#059669', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} />
-                                </LineChart>
+                                    <Area type="monotone" dataKey="in" stroke="#10b981" fillOpacity={1} fill="url(#colorIn)" strokeWidth={3} />
+                                    <Area type="monotone" dataKey="out" stroke="#f43f5e" fillOpacity={1} fill="url(#colorOut)" strokeWidth={3} />
+                                </AreaChart>
                             </ResponsiveContainer>
-                        ) : (
-                            <div className="flex h-full items-center justify-center text-muted-foreground text-xs italic">
-                                No purchase history available for price tracking.
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
+                        </CardContent>
+                    </Card>
+                )}
 
-                {/* 3. Warehouse Distribution (Existing) */}
-                <Card className="shadow-lg bg-card border-none">
+                {/* 2. Price History Chart (Hidden for Sales Rep) */}
+                {userRole !== 'sales_representative' && (
+                    <Card className="shadow-lg bg-card/60 backdrop-blur border-none">
+                        <CardHeader className="border-b border-muted/30 pb-4">
+                            <CardTitle className="text-sm font-black uppercase tracking-[0.2em] flex items-center gap-2">
+                                <IndianRupee className="h-4 w-4 text-emerald-600" /> Price Volatility
+                            </CardTitle>
+                            <CardDescription>Unit cost history based on recent procurement orders.</CardDescription>
+                        </CardHeader>
+                        <CardContent className="pt-8 pl-0 h-[300px]">
+                            {priceHistory.length > 0 ? (
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={priceHistory} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#88888820" />
+                                        <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} />
+                                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} domain={['auto', 'auto']} />
+                                        <Tooltip
+                                            contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', border: 'none' }}
+                                            itemStyle={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#059669' }}
+                                            formatter={(value: any) => [`₹${value}`, 'Unit Cost']}
+                                        />
+                                        <Line type="stepAfter" dataKey="price" stroke="#059669" strokeWidth={3} dot={{ r: 4, fill: '#059669', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            ) : (
+                                <div className="flex h-full items-center justify-center text-muted-foreground text-xs italic">
+                                    No purchase history available for price tracking.
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                )}
+
+                {/* 3. Warehouse Distribution (Kept for Sales Rep) */}
+                <Card className={`shadow-lg bg-card border-none ${userRole === 'sales_representative' ? 'lg:col-span-2' : ''}`}>
                     <CardHeader className="border-b border-muted/30 pb-4">
                         <CardTitle className="text-sm font-black uppercase tracking-[0.2em] flex items-center gap-2">
                             <Package className="h-4 w-4 text-indigo-600" /> Stock by Location
@@ -508,39 +534,41 @@ export default function ProductAnalyticsPage({ params: paramsPromise }: { params
                     </CardContent>
                 </Card>
 
-                {/* 4. Warehouse Outgoing Comparison (New) */}
-                <Card className="shadow-lg bg-card border-none">
-                    <CardHeader className="border-b border-muted/30 pb-4">
-                        <CardTitle className="text-sm font-black uppercase tracking-[0.2em] flex items-center gap-2">
-                            <ArrowRightLeft className="h-4 w-4 text-rose-600" /> Outgoing Volume
-                        </CardTitle>
-                        <CardDescription>Comparative analysis of consumption/transfer by site.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="pt-8 h-[300px]">
-                        {warehouseOutgoing.length > 0 ? (
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={warehouseOutgoing} layout="vertical" margin={{ top: 0, right: 30, left: 40, bottom: 0 }}>
-                                    <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#88888820" />
-                                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} />
-                                    <YAxis dataKey="name" type="category" width={100} axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#888' }} />
-                                    <Tooltip
-                                        cursor={{ fill: 'transparent' }}
-                                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                                    />
-                                    <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={20} fill="#f43f5e" />
-                                </BarChart>
-                            </ResponsiveContainer>
-                        ) : (
-                            <div className="flex h-full items-center justify-center text-muted-foreground text-xs italic">
-                                No outgoing movement recorded yet.
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
+                {/* 4. Warehouse Outgoing Comparison (Hidden for Sales Rep) */}
+                {userRole !== 'sales_representative' && (
+                    <Card className="shadow-lg bg-card border-none">
+                        <CardHeader className="border-b border-muted/30 pb-4">
+                            <CardTitle className="text-sm font-black uppercase tracking-[0.2em] flex items-center gap-2">
+                                <ArrowRightLeft className="h-4 w-4 text-rose-600" /> Outgoing Volume
+                            </CardTitle>
+                            <CardDescription>Comparative analysis of consumption/transfer by site.</CardDescription>
+                        </CardHeader>
+                        <CardContent className="pt-8 h-[300px]">
+                            {warehouseOutgoing.length > 0 ? (
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={warehouseOutgoing} layout="vertical" margin={{ top: 0, right: 30, left: 40, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#88888820" />
+                                        <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#888' }} />
+                                        <YAxis dataKey="name" type="category" width={100} axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#888' }} />
+                                        <Tooltip
+                                            cursor={{ fill: 'transparent' }}
+                                            contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                                        />
+                                        <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={20} fill="#f43f5e" />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            ) : (
+                                <div className="flex h-full items-center justify-center text-muted-foreground text-xs italic">
+                                    No outgoing movement recorded yet.
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                )}
             </div>
 
-            {/* Pending Orders Section (New) */}
-            {pendingOrders.length > 0 && (
+            {/* Pending Orders Section (Hidden for Sales Rep) */}
+            {pendingOrders.length > 0 && userRole !== 'sales_representative' && (
                 <Card className="border-l-4 border-l-amber-500 shadow-xl">
                     <CardHeader>
                         <CardTitle className="text-lg font-black flex items-center gap-2">
@@ -576,65 +604,68 @@ export default function ProductAnalyticsPage({ params: paramsPromise }: { params
                 </Card>
             )}
 
-            {/* Movement Visualization Graph */}
-            <Card className="border-none shadow-2xl overflow-hidden bg-slate-900 text-white">
-                <CardHeader className="bg-slate-900 border-b border-slate-800">
-                    <CardTitle className="text-sm font-black uppercase tracking-widest text-indigo-400">Inventory Movement Architecture</CardTitle>
-                    <CardDescription className="text-slate-500">Live data-driven flow mapping of product lifecycle.</CardDescription>
-                </CardHeader>
-                <CardContent className="p-0 h-[400px] relative overflow-hidden">
-                    <MovementGraph nodes={graphData.nodes} edges={graphData.edges} />
-                </CardContent>
-            </Card>
+            {/* Movement Visualization & Logs (Hidden for Sales Rep) */}
+            {userRole !== 'sales_representative' && (
+                <>
+                    <Card className="border-none shadow-2xl overflow-hidden bg-slate-900 text-white">
+                        <CardHeader className="bg-slate-900 border-b border-slate-800">
+                            <CardTitle className="text-sm font-black uppercase tracking-widest text-indigo-400">Inventory Movement Architecture</CardTitle>
+                            <CardDescription className="text-slate-500">Live data-driven flow mapping of product lifecycle.</CardDescription>
+                        </CardHeader>
+                        <CardContent className="p-0 h-[400px] relative overflow-hidden">
+                            <MovementGraph nodes={graphData.nodes} edges={graphData.edges} />
+                        </CardContent>
+                    </Card>
 
-            {/* Movement Logs */}
-            <Card className="border-none shadow-xl border-t-8 border-t-slate-800">
-                <CardHeader>
-                    <CardTitle className="text-xl font-black">Lifecycle Audit Log</CardTitle>
-                    <CardDescription>Chronological record of every unit adjustment across the network.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="overflow-hidden rounded-xl border">
-                        <table className="w-full text-xs">
-                            <thead className="bg-slate-50 border-b">
-                                <tr className="text-left font-black uppercase text-slate-500 tracking-widest">
-                                    <th className="px-6 py-4">Event Date</th>
-                                    <th className="px-6 py-4">Action Type</th>
-                                    <th className="px-6 py-4">Flow Source</th>
-                                    <th className="px-6 py-4">Flow Target</th>
-                                    <th className="px-6 py-4 text-right">Magnitude</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y">
-                                {transactions.map((t, idx) => (
-                                    <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                                        <td className="px-6 py-4 font-mono font-bold text-slate-400">
-                                            {new Date(t.time).toLocaleString()}
-                                        </td>
-                                        <td className="px-6 py-4 capitalize font-black">
-                                            <span className={`px-3 py-1 rounded-full text-[9px] font-bold ${t.type === 'receive' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' :
-                                                t.type === 'transfer' ? 'bg-indigo-500/10 text-indigo-600 border border-indigo-500/20' :
-                                                    'bg-rose-500/10 text-rose-600 border border-rose-500/20'
-                                                }`}>
-                                                {t.type}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 text-slate-600 font-medium">
-                                            {t.warehouse?.w_name || 'Global Stream'}
-                                        </td>
-                                        <td className="px-6 py-4 text-slate-600 font-medium">
-                                            {t.target?.w_name || 'External Sink'}
-                                        </td>
-                                        <td className={`px-6 py-4 font-black text-right text-base ${t.amt > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                            {t.amt > 0 ? `+${t.amt}` : t.amt}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </CardContent>
-            </Card>
+                    <Card className="border-none shadow-xl border-t-8 border-t-slate-800">
+                        <CardHeader>
+                            <CardTitle className="text-xl font-black">Lifecycle Audit Log</CardTitle>
+                            <CardDescription>Chronological record of every unit adjustment across the network.</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="overflow-hidden rounded-xl border">
+                                <table className="w-full text-xs">
+                                    <thead className="bg-slate-50 border-b">
+                                        <tr className="text-left font-black uppercase text-slate-500 tracking-widest">
+                                            <th className="px-6 py-4">Event Date</th>
+                                            <th className="px-6 py-4">Action Type</th>
+                                            <th className="px-6 py-4">Flow Source</th>
+                                            <th className="px-6 py-4">Flow Target</th>
+                                            <th className="px-6 py-4 text-right">Magnitude</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y">
+                                        {transactions.map((t, idx) => (
+                                            <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                                <td className="px-6 py-4 font-mono font-bold text-slate-400">
+                                                    {new Date(t.time).toLocaleString()}
+                                                </td>
+                                                <td className="px-6 py-4 capitalize font-black">
+                                                    <span className={`px-3 py-1 rounded-full text-[9px] font-bold ${t.type === 'receive' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' :
+                                                        t.type === 'transfer' ? 'bg-indigo-500/10 text-indigo-600 border border-indigo-500/20' :
+                                                            'bg-rose-500/10 text-rose-600 border border-rose-500/20'
+                                                        }`}>
+                                                        {t.type}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 text-slate-600 font-medium">
+                                                    {t.warehouse?.w_name || 'Global Stream'}
+                                                </td>
+                                                <td className="px-6 py-4 text-slate-600 font-medium">
+                                                    {t.target?.w_name || 'External Sink'}
+                                                </td>
+                                                <td className={`px-6 py-4 font-black text-right text-base ${t.amt > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                    {t.amt > 0 ? `+${t.amt}` : t.amt}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </>
+            )}
         </div>
     )
 }

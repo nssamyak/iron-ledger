@@ -14,7 +14,7 @@ import {
     ExternalLink,
     Calendar,
     User,
-    DollarSign,
+    IndianRupee,
     CheckCircle2,
     Clock,
     AlertCircle,
@@ -50,6 +50,8 @@ export default function OrdersPage() {
 
     // Form State
     const [isCreateOpen, setIsCreateOpen] = useState(false)
+    const [isUploadOpen, setIsUploadOpen] = useState(false)
+    const [uploadOrderData, setUploadOrderData] = useState<{ id: number; sup_id: number } | null>(null)
     const [newOrder, setNewOrder] = useState({
         p_id: '',
         sup_id: '',
@@ -82,8 +84,42 @@ export default function OrdersPage() {
         setUser(authUser)
 
         if (authUser) {
-            const { data: roleData } = await supabase.from('user_roles').select('role').eq('user_id', authUser.id).single()
-            setRole(roleData?.role || 'warehouse_staff')
+            // 1. Get mapping from user_roles
+            const { data: urData } = await supabase
+                .from('user_roles')
+                .select('*')
+                .eq('user_id', authUser.id)
+                .maybeSingle()
+
+            const empIdFromUR = (urData as any)?.emp_id
+
+            // 2. Get employee record
+            let employeeData = null
+            if (empIdFromUR) {
+                const { data: e } = await supabase.from('employees').select('role_id').eq('e_id', empIdFromUR).maybeSingle()
+                employeeData = e
+            } else {
+                const { data: e } = await supabase.from('employees').select('role_id').eq('user_id', authUser.id).maybeSingle()
+                employeeData = e
+            }
+
+            // 3. Resolve role name
+            let dbRoleName = null
+            if (employeeData?.role_id) {
+                const { data: roleRec } = await supabase.from('roles').select('role_name').eq('role_id', employeeData.role_id).maybeSingle()
+                dbRoleName = roleRec?.role_name
+            }
+
+            let userRole = 'warehouse_staff'
+            if (dbRoleName === 'Administrator') {
+                userRole = 'admin'
+            } else if (dbRoleName === 'Warehouse Manager') {
+                userRole = 'manager'
+            } else if (dbRoleName) {
+                userRole = dbRoleName.toLowerCase().replace(/ /g, '_')
+            }
+
+            setRole(userRole)
         }
 
         // Dropdown Data
@@ -184,13 +220,82 @@ export default function OrdersPage() {
         }
     }
 
+    const handleDirectBillUpload = async (e: React.FormEvent) => {
+        e.preventDefault()
+        if (!billFile || !uploadOrderData) return
+
+        setSubmitting(true)
+        try {
+            // 1. Upload Bill to Storage
+            const fileExt = billFile.name.split('.').pop()
+            const fileName = `${Math.random()}.${fileExt}`
+            const filePath = `bills/${fileName}`
+
+            const { error: uploadError } = await supabase.storage
+                .from('order-assets')
+                .upload(filePath, billFile)
+
+            if (uploadError) throw uploadError
+
+            const { data: { publicUrl } } = supabase.storage
+                .from('order-assets')
+                .getPublicUrl(filePath)
+
+            // 2. Get employee ID
+            const { data: empData } = await supabase.from('employees').select('e_id').eq('user_id', user.id).single()
+
+            // 3. Create Bill Record
+            const { error: billError } = await supabase
+                .from('bills')
+                .insert([{
+                    order_id: uploadOrderData.id,
+                    supplier_id: uploadOrderData.sup_id,
+                    file_url: publicUrl,
+                    file_type: billFile.type,
+                    uploaded_by: empData?.e_id
+                }])
+
+            if (billError) throw billError
+
+            setIsUploadOpen(false)
+            setUploadOrderData(null)
+            setBillFile(null)
+            await fetchOrders()
+            alert("Bill uploaded successfully!")
+
+        } catch (err: any) {
+            alert(err.message)
+        } finally {
+            setSubmitting(false)
+        }
+    }
+
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'received': return 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20';
             case 'pending': return 'bg-amber-500/10 text-amber-600 border-amber-500/20';
             case 'shipped': return 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20';
             case 'cancelled': return 'bg-rose-500/10 text-rose-600 border-rose-500/20';
+            case 'cancel_pending': return 'bg-orange-500/10 text-orange-600 border-orange-500/20 animate-pulse';
             default: return 'bg-muted text-muted-foreground';
+        }
+    }
+
+    const handleUpdateOrderStatus = async (orderId: number, newStatus: string) => {
+        setSubmitting(true)
+        try {
+            const { error } = await supabase
+                .from('orders')
+                .update({ status: newStatus })
+                .eq('po_id', orderId)
+
+            if (error) throw error
+            await fetchOrders()
+            alert(`Order status updated to ${newStatus}`)
+        } catch (err: any) {
+            alert("Error: " + err.message)
+        } finally {
+            setSubmitting(false)
         }
     }
 
@@ -280,17 +385,71 @@ export default function OrdersPage() {
                                         </td>
                                         <td className="px-6 py-4 text-right">
                                             <div className="font-mono font-bold text-indigo-600 text-base">
-                                                ${Number(o.price || 0).toLocaleString()}
+                                                ₹{Number(o.price || 0).toLocaleString('en-IN')}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 text-center">
-                                            {o.bills?.[0] ? (
-                                                <a href={o.bills[0].file_url} target="_blank" className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all shadow-sm">
-                                                    <FileText className="h-4 w-4" />
-                                                </a>
-                                            ) : (
-                                                <span className="text-[10px] text-muted-foreground italic">No Bill</span>
-                                            )}
+                                            <div className="flex flex-col items-center gap-2">
+                                                {o.bills?.[0] ? (
+                                                    <a href={o.bills[0].file_url} target="_blank" className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all shadow-sm" title="View Bill">
+                                                        <FileText className="h-4 w-4" />
+                                                    </a>
+                                                ) : (
+                                                    <div className="flex flex-col items-center gap-1">
+                                                        <span className="text-[10px] text-muted-foreground italic mb-1">No Bill</span>
+                                                        {(role === 'admin' || role === 'procurement_officer') && (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                className="h-7 text-[10px] font-black uppercase text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 px-2 rounded-md border border-indigo-100"
+                                                                onClick={() => {
+                                                                    setUploadOrderData({ id: o.po_id, sup_id: o.sup_id })
+                                                                    setIsUploadOpen(true)
+                                                                }}
+                                                            >
+                                                                Add Bill
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                {/* Cancellation Workflow */}
+                                                {o.status !== 'cancelled' && o.status !== 'received' && (
+                                                    <div className="flex gap-1">
+                                                        {role === 'admin' ? (
+                                                            <>
+                                                                {o.status === 'cancel_pending' && (
+                                                                    <Button
+                                                                        size="sm"
+                                                                        variant="ghost"
+                                                                        className="h-7 text-[9px] font-black uppercase bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white border border-emerald-100"
+                                                                        onClick={() => handleUpdateOrderStatus(o.po_id, 'cancelled')}
+                                                                    >
+                                                                        Approve Cancel
+                                                                    </Button>
+                                                                )}
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="ghost"
+                                                                    className="h-7 text-[9px] font-black uppercase bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white border border-rose-100"
+                                                                    onClick={() => handleUpdateOrderStatus(o.po_id, o.status === 'cancel_pending' ? 'pending' : 'cancelled')}
+                                                                >
+                                                                    {o.status === 'cancel_pending' ? 'Reject Cancel' : 'Cancel PO'}
+                                                                </Button>
+                                                            </>
+                                                        ) : role === 'procurement_officer' && o.status !== 'cancel_pending' ? (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                className="h-7 text-[9px] font-black uppercase bg-amber-50 text-amber-600 hover:bg-amber-600 hover:text-white border border-amber-100"
+                                                                onClick={() => handleUpdateOrderStatus(o.po_id, 'cancel_pending')}
+                                                            >
+                                                                Request Cancel
+                                                            </Button>
+                                                        ) : null}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -299,6 +458,48 @@ export default function OrdersPage() {
                     </div>
                 </Card>
             )}
+
+            {/* Direct Bill Upload Modal */}
+            <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
+                <DialogContent className="sm:max-w-[425px]">
+                    <DialogHeader>
+                        <DialogTitle>Direct Bill Upload</DialogTitle>
+                        <DialogDescription>
+                            Upload a missing bill for order PO-{uploadOrderData?.id.toString().padStart(4, '0')}.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleDirectBillUpload} className="space-y-4">
+                        <div className="space-y-4 py-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Select Bill File (PDF/Image)</label>
+                                <div className="border-2 border-dashed rounded-xl p-8 text-center group hover:border-indigo-600 transition-colors cursor-pointer relative">
+                                    <Input
+                                        type="file"
+                                        accept="image/*,application/pdf"
+                                        onChange={(e) => setBillFile(e.target.files?.[0] || null)}
+                                        className="absolute inset-0 opacity-0 cursor-pointer"
+                                        required
+                                    />
+                                    <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                                        <FileText className="h-10 w-10 group-hover:text-indigo-600" />
+                                        <span className="text-xs font-bold leading-none">{billFile ? billFile.name : "Click to select file"}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex gap-3 justify-end pt-4 border-t">
+                            <Button variant="ghost" onClick={() => {
+                                setIsUploadOpen(false)
+                                setBillFile(null)
+                            }} disabled={submitting} type="button">Cancel</Button>
+                            <Button className="bg-indigo-600 font-bold px-8 shadow-lg shadow-indigo-500/20" disabled={submitting || !billFile} type="submit">
+                                {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
+                                Upload Bill
+                            </Button>
+                        </div>
+                    </form>
+                </DialogContent>
+            </Dialog>
 
             {/* Create Order Modal */}
             <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
@@ -360,7 +561,7 @@ export default function OrdersPage() {
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Total Price ($)</label>
+                                    <label className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">Total Price (₹)</label>
                                     <Input
                                         type="number"
                                         step="0.01"

@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
@@ -21,6 +22,26 @@ interface SidebarProps {
 
 export function Sidebar({ role }: SidebarProps) {
     const pathname = usePathname()
+
+    useEffect(() => {
+        const checkUser = async () => {
+            const { createClient } = await import("@/utils/supabase/client")
+            const supabase = createClient()
+            const { data: { user } } = await supabase.auth.getUser()
+
+            if (user) {
+                // Fetch role_id for logging
+                const { data: empData } = await supabase
+                    .from('employees')
+                    .select('role_id')
+                    .eq('user_id', user.id)
+                    .maybeSingle()
+
+                console.log(`userID: ${user.id} role_id: ${empData?.role_id}`)
+            }
+        }
+        checkUser()
+    }, [])
 
     const NavItem = ({ href, icon: Icon, children }: { href: string; icon: any; children: React.ReactNode }) => {
         const isActive = pathname === href
@@ -58,12 +79,23 @@ export function Sidebar({ role }: SidebarProps) {
                         <NavItem href="/dashboard/inventory" icon={Package}>
                             Inventory
                         </NavItem>
-                        <NavItem href="/dashboard/orders" icon={ShoppingCart}>
-                            Orders
-                        </NavItem>
-                        <NavItem href="/dashboard" icon={LineChart}>
-                            Analytics
-                        </NavItem>
+
+                        {/* Navigation restricted for Sales Representatives */}
+                        {role !== 'sales_representative' && (
+                            <>
+                                <NavItem href="/dashboard/orders" icon={ShoppingCart}>
+                                    Orders
+                                </NavItem>
+                                <NavItem href="/dashboard" icon={LineChart}>
+                                    Analytics
+                                </NavItem>
+                                {(role === 'admin' || role === 'manager') && (
+                                    <NavItem href="/dashboard/employees" icon={Users}>
+                                        Employee Stats
+                                    </NavItem>
+                                )}
+                            </>
+                        )}
 
                         {/* Admin Only Links */}
                         {role === 'admin' && (

@@ -29,7 +29,7 @@ type Message = {
     explanation?: string
     previewData?: any
     requiresConfirmation?: boolean
-    intent?: "move" | "order" | "adjustment" | "query" | "none"
+    intent?: "move" | "order" | "adjustment" | "receive" | "cancel" | "none"
     params?: any
 }
 
@@ -49,6 +49,7 @@ export default function ChatPage() {
     const [suppliers, setSuppliers] = useState<any[]>([])
     const [allOrders, setAllOrders] = useState<any[]>([])
     const [employeeId, setEmployeeId] = useState<string | null>(null)
+    const [userRole, setUserRole] = useState<string>('warehouse_staff')
 
     // Bill Upload State
     const [isBillModalOpen, setIsBillModalOpen] = useState(false)
@@ -79,7 +80,7 @@ export default function ChatPage() {
             supabase.from('products').select('pid, p_name, unit_price'),
             supabase.from('warehouses').select('w_id, w_name'),
             supabase.from('suppliers').select('sup_id, s_name'),
-            supabase.from('orders').select(`po_id, quantity, received_quantity, p_id, target_w_id, products(p_name), warehouses!orders_target_w_id_fkey(w_name)`).neq('status', 'received'),
+            supabase.from('orders').select(`po_id, quantity, received_quantity, p_id, target_w_id, status, products(p_name), warehouses!orders_target_w_id_fkey(w_name)`).neq('status', 'received').neq('status', 'cancelled'),
             supabase.auth.getUser()
         ]);
         setProducts(p.data || [])
@@ -88,8 +89,22 @@ export default function ChatPage() {
         setAllOrders(o.data || [])
 
         if (userRes.data?.user) {
-            const { data: emp } = await supabase.from('employees').select('e_id').eq('user_id', userRes.data.user.id).single()
-            if (emp) setEmployeeId(emp.e_id)
+            const { data: emp } = await supabase.from('employees').select('e_id, role_id').eq('user_id', userRes.data.user.id).single()
+            if (emp) {
+                setEmployeeId(emp.e_id)
+                // Resolve role
+                if (emp.role_id) {
+                    const { data: roleData } = await supabase.from('roles').select('role_name').eq('role_id', emp.role_id).single()
+                    if (roleData) {
+                        const dbRoleName = roleData.role_name
+                        let role = 'warehouse_staff'
+                        if (dbRoleName === 'Administrator') role = 'admin'
+                        else if (dbRoleName === 'Warehouse Manager') role = 'manager'
+                        else if (dbRoleName === 'Procurement Officer') role = 'procurement_officer'
+                        setUserRole(role)
+                    }
+                }
+            }
         }
     }
 
@@ -290,6 +305,7 @@ export default function ChatPage() {
                                     suppliers={suppliers}
                                     allOrders={allOrders}
                                     employeeId={employeeId}
+                                    userRole={userRole}
                                     handleConfirm={handleConfirm}
                                 />
                             )}
@@ -411,7 +427,7 @@ export default function ChatPage() {
     )
 }
 
-function ActionForm({ message, products, warehouses, suppliers, allOrders, employeeId, handleConfirm }: any) {
+function ActionForm({ message, products, warehouses, suppliers, allOrders, employeeId, userRole, handleConfirm }: any) {
     const [formState, setFormState] = useState({
         pid: message.params?.pid ? String(message.params.pid) : "",
         w_id: message.params?.w_id ? String(message.params.w_id) : "",
@@ -458,9 +474,9 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
             </div>
 
             <div className="grid grid-cols-1 gap-4">
-                {message.intent === 'receive' && (
+                {(message.intent === 'receive' || message.intent === 'cancel') && (
                     <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-muted-foreground uppercase">Target Purchase Order</label>
+                        <label className="text-[9px] font-bold text-muted-foreground uppercase">{message.intent === 'receive' ? 'Target Purchase Order' : 'Order to Cancel'}</label>
                         <Select value={formState.po_id} onValueChange={(val: any) => setFormState(prev => ({ ...prev, po_id: String(val) }))}>
                             <SelectTrigger className="h-9 text-xs bg-background border-2">
                                 <SelectValue placeholder="Select Order">
@@ -470,7 +486,7 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                             <SelectContent>
                                 {allOrders.map((o: any) => (
                                     <SelectItem key={o.po_id} value={String(o.po_id)}>
-                                        PO-{String(o.po_id).padStart(4, '0')} - {o.products?.p_name} ({o.quantity - o.received_quantity} pending)
+                                        PO-{String(o.po_id).padStart(4, '0')} - {o.products?.p_name} ({o.status})
                                     </SelectItem>
                                 ))}
                             </SelectContent>
@@ -569,7 +585,7 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
 
                     {(message.intent === 'order' || message.intent === 'receive') && (
                         <div className="space-y-1">
-                            <label className="text-[9px] font-bold text-muted-foreground uppercase">{message.intent === 'order' ? 'Price ($)' : 'PO Total Price'}</label>
+                            <label className="text-[9px] font-bold text-muted-foreground uppercase">{message.intent === 'order' ? 'Price (₹)' : 'PO Total Price'}</label>
                             <Input
                                 type="number"
                                 step="0.01"
@@ -585,8 +601,8 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
 
             <Button
                 size="sm"
-                className="w-full h-11 mt-2 bg-primary hover:bg-primary/90 text-white font-bold shadow-lg"
-                disabled={message.intent === 'receive' && !formState.po_id}
+                className={`w-full h-11 mt-2 text-white font-bold shadow-lg ${message.intent === 'cancel' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-primary hover:bg-primary/90'}`}
+                disabled={(message.intent === 'receive' || message.intent === 'cancel') && !formState.po_id}
                 onClick={() => {
                     let sql = "";
                     const e_id = employeeId ? `'${employeeId}'` : "(SELECT e_id FROM employees WHERE user_id = auth.uid())";
@@ -633,6 +649,9 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                             
                             UPDATE products SET quantity = (SELECT SUM(stock) FROM product_warehouse WHERE pid = ${formState.pid}) WHERE pid = ${formState.pid};
                         `;
+                    } else if (message.intent === 'cancel') {
+                        const newStatus = userRole === 'admin' ? 'cancelled' : 'cancel_pending';
+                        sql = `UPDATE orders SET status = '${newStatus}'::order_status WHERE po_id = ${formState.po_id};`;
                     }
 
                     let customExplanation = `processed ${message.intent} for ${formState.quantity} units.`;
@@ -643,12 +662,14 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                             const pending = Math.max(0, order.quantity - newReceived);
                             customExplanation = `received ${newReceived}/${order.quantity} units (PO-${formState.po_id.padStart(4, '0')}). ${pending > 0 ? `${pending} pending.` : 'Order complete!'}`;
                         }
+                    } else if (message.intent === 'cancel') {
+                        customExplanation = userRole === 'admin' ? `cancelled order PO-${formState.po_id.padStart(4, '0')}.` : `requested cancellation for PO-${formState.po_id.padStart(4, '0')}. Pending admin approval.`;
                     }
 
                     handleConfirm(sql, customExplanation);
                 }}
             >
-                <Play className="h-4 w-4 mr-2" /> Confirm & Execute Action
+                <Play className="h-4 w-4 mr-2" /> {message.intent === 'cancel' ? 'Confirm Cancellation' : 'Confirm & Execute Action'}
             </Button>
         </div>
     );

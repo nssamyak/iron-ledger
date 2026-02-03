@@ -7,12 +7,11 @@ Schema:
 - products(pid, p_name, unit_price)
 - warehouses(w_id, w_name)
 - suppliers(sup_id, s_name)
-- orders(po_id, quantity, received_quantity, status, p_id, target_w_id) -- status: 'pending', 'partial', 'received'
-- transactions...
+- orders(po_id, quantity, received_quantity, status, p_id, target_w_id) -- status: 'pending', 'approved', 'ordered', 'shipped', 'received', 'cancelled', 'cancel_pending'
 
 Operational Rules:
 1. Output Format: Return ONLY a JSON object: {
-    "intent": "move" | "order" | "adjustment" | "receive" | "query" | "none", 
+    "intent": "move" | "order" | "adjustment" | "receive" | "cancel" | "query" | "none", 
     "params": { 
       "pid": number | null, 
       "w_id": number | null, 
@@ -25,12 +24,21 @@ Operational Rules:
     "message": "Conversational human response",
     "sql": "ONLY for intent='query'"
   }.
-2. ID Resolution: Match names to IDs. For 'receive', try to match the most relevant active order (po_id) based on the product or supplier mentioned.
+2. ID Resolution: Match names to IDs. 
+   - For 'receive', try to match the most relevant active order (po_id).
+   - For 'cancel', the user MUST providing or imply an order ID (po_id).
 3. Intent Rules:
    - 'receive': Used when a user mentions receiving stock from an existing order.
+   - 'cancel': Used when a user wants to cancel an order. 
+     - If role is 'admin', set status to 'cancelled'.
+     - If role is 'procurement_officer', set status to 'cancel_pending'.
    - 'query': SELECT queries.
    - Others: Action forms.
-4. Persona: Helpful human warehouse assistant.
+4. Access Control:
+   - If role is 'sales_representative', the ONLY allowed intents are 'query' and 'none'. 
+   - Deny ANY request from 'sales_representative' to move stock, create orders, adjust inventory, receive items, or cancel orders. 
+   - For denied actions, set intent to 'none' and explain that they do not have permission.
+5. Persona: Helpful human warehouse assistant.
 `;
 
 
@@ -57,13 +65,38 @@ export async function POST(req: Request) {
 
         let userContext = "Current User: Guest";
         if (user) {
-            const [empRes, roleRes] = await Promise.all([
-                supabase.from('employees').select('e_id, f_name').eq('user_id', user.id).single(),
-                supabase.from('user_roles').select('role').eq('user_id', user.id).single()
-            ]);
+            // 1. Get mapping from user_roles
+            const { data: urData } = await supabase.from('user_roles').select('*').eq('user_id', user.id).maybeSingle();
+            const empIdFromUR = (urData as any)?.emp_id;
 
-            if (empRes.data) {
-                userContext = `Current User Employee ID: ${empRes.data.e_id}, Name: ${empRes.data.f_name}, Role: ${roleRes.data?.role || 'warehouse_staff'}`;
+            // 2. Get employee record
+            let empData = null;
+            if (empIdFromUR) {
+                const { data: e } = await supabase.from('employees').select('e_id, f_name, role_id').eq('e_id', empIdFromUR).maybeSingle();
+                empData = e;
+            } else {
+                const { data: e } = await supabase.from('employees').select('e_id, f_name, role_id').eq('user_id', user.id).maybeSingle();
+                empData = e;
+            }
+
+            if (empData) {
+                // 3. Resolve role name
+                let dbRoleName = null;
+                if (empData.role_id) {
+                    const { data: roleRec } = await supabase.from('roles').select('role_name').eq('role_id', empData.role_id).maybeSingle();
+                    dbRoleName = roleRec?.role_name;
+                }
+
+                let role = 'warehouse_staff';
+                if (dbRoleName === 'Administrator') {
+                    role = 'admin';
+                } else if (dbRoleName === 'Warehouse Manager') {
+                    role = 'manager';
+                } else if (dbRoleName) {
+                    role = dbRoleName.toLowerCase().replace(/ /g, '_');
+                }
+
+                userContext = `Current User Employee ID: ${empData.e_id}, Name: ${empData.f_name}, Role: ${role}`;
             }
         }
 

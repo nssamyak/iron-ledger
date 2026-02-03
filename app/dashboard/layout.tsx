@@ -18,14 +18,58 @@ export default async function DashboardLayout({
         redirect("/login")
     }
 
-    // Fetch user role
-    const { data: userRoleData } = await supabase
-        .from('user_roles')
-        .select('role')
-        .eq('user_id', user.id)
-        .single()
+    console.log("DASHBOARD LOAD: User ID =", user.id)
 
-    const role = userRoleData?.role || 'warehouse_staff'
+    // 1. Get mapping from user_roles (User suggestion: user_id -> emp_id)
+    const { data: urData } = await supabase
+        .from('user_roles')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+    const empIdFromUR = (urData as any)?.emp_id
+
+    // 2. Get employee record (using emp_id if found, else falling back to user_id)
+    let employeeData = null
+    if (empIdFromUR) {
+        const { data: e } = await supabase
+            .from('employees')
+            .select('role_id')
+            .eq('e_id', empIdFromUR)
+            .maybeSingle()
+        employeeData = e
+    } else {
+        const { data: e } = await supabase
+            .from('employees')
+            .select('role_id')
+            .eq('user_id', user.id)
+            .maybeSingle()
+        employeeData = e
+    }
+
+    // 3. Resolve role name from roles table
+    let dbRoleName = null
+    if (employeeData?.role_id) {
+        const { data: roleRec } = await supabase
+            .from('roles')
+            .select('role_name')
+            .eq('role_id', employeeData.role_id)
+            .maybeSingle()
+        dbRoleName = roleRec?.role_name
+    }
+
+    // Role mapping logic
+    let role = 'warehouse_staff'
+    if (dbRoleName === 'Administrator') {
+        role = 'admin'
+    } else if (dbRoleName === 'Warehouse Manager') {
+        role = 'manager'
+    } else if (dbRoleName) {
+        role = dbRoleName.toLowerCase().replace(/ /g, '_')
+    }
+
+    // Console log for debugging
+    console.log(`userID: ${user.id} role_id: ${employeeData?.role_id}`)
 
     return (
         <div className="grid min-h-screen w-full lg:grid-cols-[280px_1fr]">
