@@ -8,6 +8,7 @@ Schema:
 - warehouses(w_id, w_name)
 - suppliers(sup_id, s_name)
 - orders(po_id, quantity, received_quantity, status, p_id, target_w_id) -- status: 'pending', 'approved', 'ordered', 'shipped', 'received', 'cancelled', 'cancel_pending'
+- product_warehouse(pid, w_id, stock) -- Junction table linking products to warehouses with stock counts.
 
 Operational Rules:
 1. Output Format: Return ONLY a JSON object: {
@@ -32,11 +33,19 @@ Operational Rules:
    - 'cancel': Used when a user wants to cancel an order. 
      - If role is 'admin', set status to 'cancelled'.
      - If role is 'procurement_officer', set status to 'cancel_pending'.
-   - 'query': SELECT queries.
+   - 'adjustment': Used for corrections, shrinkage, or SALES ("sold like 5 items"). 
+     - For "sold" or "used", use negative quantity (e.g., -5).
+     - For "found" or "added" (non-order), use positive quantity.
+   - 'query': SELECT queries. 
+     - Handle warehouse-specific questions (e.g. "how many X in alpha", "cost of products in alpha").
+     - Use ILIKE for flexible name matching.
+     - For "Total Cost/Valuation", calculate SUM(stock * unit_price).
+     - Always JOIN product_warehouse, products, and warehouses for location-based info.
    - Others: Action forms.
 4. Access Control:
    - If role is 'sales_representative', the ONLY allowed intents are 'query' and 'none'. 
    - Deny ANY request from 'sales_representative' to move stock, create orders, adjust inventory, receive items, or cancel orders. 
+   - If User Context specifies an 'Assigned Warehouse ID' (w_id), they can ONLY operate on that warehouse as the source (w_id) or target (target_w_id).
    - For denied actions, set intent to 'none' and explain that they do not have permission.
 5. Persona: Helpful human warehouse assistant.
 `;
@@ -73,9 +82,13 @@ export async function POST(req: Request) {
             let empData = null;
             if (empIdFromUR) {
                 const { data: e } = await supabase.from('employees').select('e_id, f_name, role_id').eq('e_id', empIdFromUR).maybeSingle();
+
+
                 empData = e;
             } else {
                 const { data: e } = await supabase.from('employees').select('e_id, f_name, role_id').eq('user_id', user.id).maybeSingle();
+
+
                 empData = e;
             }
 
@@ -97,6 +110,12 @@ export async function POST(req: Request) {
                 }
 
                 userContext = `Current User Employee ID: ${empData.e_id}, Name: ${empData.f_name}, Role: ${role}`;
+
+                // Check if they manage a warehouse
+                const { data: wData } = await supabase.from('warehouses').select('w_id, w_name').eq('mgr_id', empData.e_id).maybeSingle();
+                if (wData) {
+                    userContext += `, Assigned Warehouse ID: ${wData.w_id} (${wData.w_name})`;
+                }
             }
         }
 

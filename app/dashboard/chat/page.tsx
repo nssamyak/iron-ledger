@@ -49,6 +49,7 @@ export default function ChatPage() {
     const [suppliers, setSuppliers] = useState<any[]>([])
     const [allOrders, setAllOrders] = useState<any[]>([])
     const [employeeId, setEmployeeId] = useState<string | null>(null)
+    const [employeeWId, setEmployeeWId] = useState<string | null>(null)
     const [userRole, setUserRole] = useState<string>('warehouse_staff')
 
     // Bill Upload State
@@ -92,6 +93,10 @@ export default function ChatPage() {
             const { data: emp } = await supabase.from('employees').select('e_id, role_id').eq('user_id', userRes.data.user.id).single()
             if (emp) {
                 setEmployeeId(emp.e_id)
+                // Check if they manage a warehouse
+                const { data: wData } = await supabase.from('warehouses').select('w_id').eq('mgr_id', emp.e_id).maybeSingle()
+                setEmployeeWId(wData ? String(wData.w_id) : null)
+
                 // Resolve role
                 if (emp.role_id) {
                     const { data: roleData } = await supabase.from('roles').select('role_name').eq('role_id', emp.role_id).single()
@@ -257,9 +262,7 @@ export default function ChatPage() {
             })
             const data = await res.json()
             if (data.success) {
-                if (Array.isArray(data.data) && data.data.length === 0) {
-                    setMessages(prev => [...prev, { role: "system", content: "Query executed successfully, but 0 records were affected. Double-check item names or warehouse spelling." }])
-                } else {
+                if (data.success) {
                     const successMsg = explanation ? `Successfully ${explanation.toLowerCase().replace(/^success/, '').trim()}` : "Action completed successfully."
                     setMessages(prev => [...prev, { role: "system", content: successMsg }])
 
@@ -305,6 +308,7 @@ export default function ChatPage() {
                                     suppliers={suppliers}
                                     allOrders={allOrders}
                                     employeeId={employeeId}
+                                    employeeWId={employeeWId}
                                     userRole={userRole}
                                     handleConfirm={handleConfirm}
                                 />
@@ -427,7 +431,7 @@ export default function ChatPage() {
     )
 }
 
-function ActionForm({ message, products, warehouses, suppliers, allOrders, employeeId, userRole, handleConfirm }: any) {
+function ActionForm({ message, products, warehouses, suppliers, allOrders, employeeId, employeeWId, userRole, handleConfirm }: any) {
     const [formState, setFormState] = useState({
         pid: message.params?.pid ? String(message.params.pid) : "",
         w_id: message.params?.w_id ? String(message.params.w_id) : "",
@@ -437,6 +441,14 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
         quantity: message.params?.quantity || 1,
         price: message.params?.price || 0
     });
+
+    // Auto-select assigned warehouse for 'w_id' (Source) if restricted
+    useEffect(() => {
+        if (employeeWId && (userRole === 'manager' || userRole === 'warehouse_staff')) {
+            // Force source warehouse to be the assigned one
+            setFormState(prev => ({ ...prev, w_id: employeeWId }));
+        }
+    }, [employeeWId, userRole]);
 
     // Auto-update other fields when po_id changes for 'receive' intent
     useEffect(() => {
@@ -536,6 +548,24 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                                 </SelectContent>
                             </Select>
                         </div>
+                    </div>
+                )}
+
+                {message.intent === 'adjustment' && (
+                    <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-muted-foreground uppercase">Warehouse</label>
+                        <Select
+                            value={formState.w_id}
+                            onValueChange={(val: any) => setFormState(prev => ({ ...prev, w_id: String(val) }))}
+                            disabled={!!employeeWId && (userRole === 'manager' || userRole === 'warehouse_staff')}
+                        >
+                            <SelectTrigger className="h-9 text-xs bg-background border-2">
+                                <SelectValue placeholder="Select Warehouse">{getWarehouseName(formState.w_id)}</SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                                {warehouses.map((w: any) => <SelectItem key={w.w_id} value={String(w.w_id)}>{w.w_name}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
                     </div>
                 )}
 
@@ -652,6 +682,21 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                     } else if (message.intent === 'cancel') {
                         const newStatus = userRole === 'admin' ? 'cancelled' : 'cancel_pending';
                         sql = `UPDATE orders SET status = '${newStatus}'::order_status WHERE po_id = ${formState.po_id};`;
+                    } else if (message.intent === 'adjustment') {
+                        const qty = parseInt(String(formState.quantity)); // could be negative
+
+                        // We use UPSERT on product_warehouse to ensure we don't break if row missing (though for negative adj it should exist)
+                        // If negative, we decrease.
+                        sql = `
+                            INSERT INTO product_warehouse (pid, w_id, stock)
+                            VALUES (${formState.pid}, ${formState.w_id}, ${qty})
+                            ON CONFLICT (pid, w_id) DO UPDATE SET stock = product_warehouse.stock + ${qty};
+
+                            INSERT INTO transactions (amt, type, pid, w_id, description, e_id)
+                            VALUES (${qty}, 'adjustment', ${formState.pid}, ${formState.w_id}, 'Adjustment via Chat: ${qty} units', ${e_id});
+
+                            UPDATE products SET quantity = (SELECT SUM(stock) FROM product_warehouse WHERE pid = ${formState.pid}) WHERE pid = ${formState.pid};
+                        `;
                     }
 
                     let customExplanation = `processed ${message.intent} for ${formState.quantity} units.`;
@@ -664,6 +709,9 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                         }
                     } else if (message.intent === 'cancel') {
                         customExplanation = userRole === 'admin' ? `cancelled order PO-${formState.po_id.padStart(4, '0')}.` : `requested cancellation for PO-${formState.po_id.padStart(4, '0')}. Pending admin approval.`;
+                    } else if (message.intent === 'adjustment') {
+                        const qty = parseInt(String(formState.quantity));
+                        customExplanation = `adjusted stock for product by ${qty} units in warehouse.`;
                     }
 
                     handleConfirm(sql, customExplanation);
