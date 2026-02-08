@@ -312,7 +312,7 @@ export default function OrdersPage() {
                     </p>
                 </div>
 
-                {(role === 'admin' || role === 'procurement_officer' || role === 'manager') && (
+                {(role === 'admin' || role === 'warehouse_staff' || role === 'manager') && (
                     <Button onClick={() => setIsCreateOpen(true)} className="gap-2 bg-indigo-600 shadow-xl transform transition-transform hover:scale-105 h-12 px-6 rounded-xl font-bold">
                         <Plus className="h-5 w-5" /> New Purchase Order
                     </Button>
@@ -397,7 +397,7 @@ export default function OrdersPage() {
                                                 ) : (
                                                     <div className="flex flex-col items-center gap-1">
                                                         <span className="text-[10px] text-muted-foreground italic mb-1">No Bill</span>
-                                                        {(role === 'admin' || role === 'procurement_officer') && (
+                                                        {(role === 'admin' || role === 'warehouse_staff' || role === 'manager') && (
                                                             <Button
                                                                 size="sm"
                                                                 variant="ghost"
@@ -437,7 +437,7 @@ export default function OrdersPage() {
                                                                     {o.status === 'cancel_pending' ? 'Reject Cancel' : 'Cancel PO'}
                                                                 </Button>
                                                             </>
-                                                        ) : role === 'procurement_officer' && o.status !== 'cancel_pending' ? (
+                                                        ) : (role === 'warehouse_staff' || role === 'manager') && o.status !== 'cancel_pending' ? (
                                                             <Button
                                                                 size="sm"
                                                                 variant="ghost"

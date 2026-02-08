@@ -426,20 +426,20 @@ export default function UserManagementPage() {
                                         {{
                                             'admin': 'Admin (Full Control)',
                                             'manager': 'Manager (Operations)',
-                                            'warehouse_staff': 'Warehouse Staff (Execution)',
-                                            'procurement_officer': 'Procurement Officer (Buying)'
+                                            'warehouse_staff': 'Warehouse / Procurement (Execution)',
+                                            'sales_representative': 'Sales Representative (View Only)'
                                         }[editingUser?.app_role as string] || 'Select Access Level'}
                                     </SelectValue>
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="admin">Admin (Full Control)</SelectItem>
                                     <SelectItem value="manager">Manager (Operations)</SelectItem>
-                                    <SelectItem value="warehouse_staff">Warehouse Staff (Execution)</SelectItem>
-                                    <SelectItem value="procurement_officer">Procurement Officer (Buying)</SelectItem>
+                                    <SelectItem value="warehouse_staff">Warehouse / Procurement (Execution)</SelectItem>
+                                    <SelectItem value="sales_representative">Sales Representative (View Only)</SelectItem>
                                 </SelectContent>
                             </Select>
                             <p className="text-[10px] text-slate-400 font-medium px-1 italic">
-                                Technical role affects Row Level Security (RLS) policies and dashboard navigation.
+                                "Sales Representative" has read-only access. "Warehouse" includes procurement duties.
                             </p>
                         </div>
                     </div>

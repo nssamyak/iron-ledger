@@ -80,7 +80,7 @@ export function Sidebar({ role }: SidebarProps) {
                             Inventory
                         </NavItem>
 
-                        {/* Navigation restricted for Sales Representatives */}
+                        {/* Navigation restricted for Sales Representatives (View Only) */}
                         {role !== 'sales_representative' && (
                             <>
                                 <NavItem href="/dashboard/orders" icon={ShoppingCart}>
