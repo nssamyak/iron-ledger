@@ -11,7 +11,9 @@ import {
     GalleryVerticalEnd,
     LineChart,
     MessageSquare,
-    TableProperties
+    TableProperties,
+    ShieldAlert,
+    Warehouse as WarehouseIcon
 } from "lucide-react"
 import { cn } from "@/app/components/ui/button"
 
@@ -89,9 +91,14 @@ export function Sidebar({ role }: SidebarProps) {
                                     Analytics
                                 </NavItem>
                                 {(role === 'admin' || role === 'manager') && (
-                                    <NavItem href="/dashboard/employees" icon={Users}>
-                                        Employee Stats
-                                    </NavItem>
+                                    <>
+                                        <NavItem href="/dashboard/warehouses" icon={WarehouseIcon}>
+                                            Warehouses
+                                        </NavItem>
+                                        <NavItem href="/dashboard/employees" icon={Users}>
+                                            Employee Stats
+                                        </NavItem>
+                                    </>
                                 )}
                             </>
                         )}
@@ -107,6 +114,10 @@ export function Sidebar({ role }: SidebarProps) {
                                 </NavItem>
                                 <NavItem href="/dashboard/admin/users" icon={Users}>
                                     User Management
+                                </NavItem>
+                                <NavItem href="/dashboard/admin/alerts" icon={ShieldAlert}>
+                                    Security & Risk Alerts
+                                    <div className="ml-auto h-2 w-2 rounded-full bg-rose-500 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.6)]" />
                                 </NavItem>
                             </>
                         )}

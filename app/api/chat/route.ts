@@ -1,48 +1,59 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 
 const SCHEMA_CONTEXT = `
-You are a PostgreSQL expert for an inventory management system (IronLedger).
+You are a PostgreSQL expert and Intelligent Logistics Architect for IronLedger.
 Schema:
 - products(pid, p_name, unit_price)
-- warehouses(w_id, w_name)
-- suppliers(sup_id, s_name)
-- orders(po_id, quantity, received_quantity, status, p_id, target_w_id, created_by) -- status: 'pending', 'approved', 'ordered', 'shipped', 'received', 'cancelled', 'cancel_pending'
-- product_warehouse(pid, w_id, stock) -- Junction table linking products to warehouses with stock counts.
-- transactions(t_id, amt, type, pid, w_id, e_id, time, description) -- type: 'receive', 'transfer', 'adjustment'
-- employees(e_id, f_name, l_name, d_id)
-- departments(d_id, d_name)
+- warehouses(w_id, w_name, capacity) -- capacity: max units the warehouse can hold.
+- suppliers(sup_id, s_name, lead_time_days) -- lead_time_days: average days for delivery.
+- orders(po_id, quantity, received_quantity, status, p_id, target_w_id, created_by)
+- product_warehouse(pid, w_id, stock, min_stock)
+- transactions(t_id, amt, type, pid, w_id, e_id, time, description)
 
-Operational Rules:
-1. Output Format: Return ONLY a JSON object: {
-    "intent": "move" | "order" | "adjustment" | "receive" | "cancel" | "query" | "none", 
-    "params": { 
-      "pid": number | null, 
-      "w_id": number | null, 
-      "target_w_id": number | null, 
-      "sup_id": number | null, 
-      "po_id": number | null,
-      "quantity": number, 
-      "price": number | null 
-    }, 
-    "message": "Conversational human response",
-    "sql": "ONLY for intent='query' - MUST be a valid SELECT statement"
+Strategic Reasoning Rules:
+1. Multi-Action Planning: If a request involves large quantities that exceed a warehouse's capacity or suggests a complex flow, you MUST generate a 'plan' array of multiple actions.
+   - Example (Split Order): User orders 500 units, but W1 (capacity 200) only has room for 50. Suggest split: Order 50 to W1, Order 450 to W2.
+2. Capacity Calculus: Always analyze (capacity - current_stock) for target warehouses before suggesting actions.
+3. Classification: view/modify/plan/investigate, risk, time_sensitivity.
+4. Financial & Operational Guardianship: You are the guardian of company capital. If a request involves extreme quantities (e.g., ordering 10k of a high-value item) or unusual patterns, you MUST:
+   - Feasibility Check: Cross-reference unit_price with quantity to estimate financial impact.
+   - Anomaly Detection: If the quantity seems like a typo (e.g. 10,000 instead of 10), flag it as a potential error.
+   - Strategic Advice: In the 'message', advise on whether the expenditure is justifiable given current stock velocity and capacity. Don't just execute; audit.
+5. Intelligent Insights: Provide actionable advice in the 'message', explaining the 'why' behind your logistical suggestions.
+
+Output Format: Return ONLY a JSON object: {
+    "intent": "plan" | "move" | "order" | "adjustment" | "receive" | "cancel" | "query" | "none", 
+    "classification": {
+      "intent_type": "view" | "modify" | "plan" | "investigate",
+      "risk": "low" | "medium" | "high",
+      "time_sensitivity": "normal" | "urgent" | "critical"
+    },
+    "system_checks": {
+      "stock": { "status": "ok" | "warning" | "alert", "message": "..." },
+      "capacity": { "status": "ok" | "warning" | "alert", "message": "..." },
+      "lead_time": { "status": "ok" | "warning", "message": "..." },
+      "permissions": { "status": "authorized" | "unauthorized", "message": "..." }
+    },
+    "plan": [
+      {
+        "intent": "move" | "order" | "adjustment" | "receive" | "cancel" | "query",
+        "params": { 
+            "pid": number | null, "w_id": number | null, "target_w_id": number | null, 
+            "sup_id": number | null, "po_id": number | null, "quantity": number, "price": number | null 
+        },
+        "sql": "ONLY if intent='query' - SELECT statement",
+        "description": "Logistical rationale for this specific step"
+      }
+    ],
+    "message": "Strategic summary of the proposed plan.",
+    "is_split_suggestion": boolean
   }.
-2. ID Resolution: Match names to IDs. 
-    - Use ILIKE '%name%' for flexible matching in SQL.
-    - If user says "PO-123", extract 123 as 'po_id'.
-3. Intent Rules:
-    - 'query': Use this for ANY "show", "list", "view", or data-related question.
-      - If user says "me", "my", "placed by me", "I created", etc., use "created_by = CUR_EMP_ID" in the WHERE clause.
-      - If user asks for "pending" items, filter by status = 'pending'.
-      - Joined queries are preferred for readability (e.g. join products for p_name).
-      - Example: "show my pending orders" -> SELECT * FROM orders WHERE created_by = CUR_EMP_ID AND status = 'pending';
-    - Action Intents (move, order, etc.): These will generate an interactive form. Use these ONLY when the user is clearly asking to PERFORM an action (e.g. "Order 50 X", "Move 10 Y from A to B").
-4. Access Control:
-    - If role is 'sales_representative', the ONLY allowed intents are 'query' and 'none'.
-    - If User Context specifies an 'Assigned Warehouse ID' (w_id), restrict queries/actions to that warehouse.
-5. Placeholder: Use CUR_EMP_ID as a literal string in the SQL for the current user's employee ID.
-6. Persona: Helpful human warehouse assistant.
+
+ID Resolution: Match names to IDs using the provided context. Use ILIKE '%name%' in SQL.
+Access Control: Admin (Full), Manager (Assigned Warehouse), Sales Rep (READ-ONLY).
+Persona: Proactive, strategic logistics architect.
 `;
 
 
@@ -119,16 +130,17 @@ export async function POST(req: Request) {
             userContext += `\nAttached Bill URL: ${billUrl}`;
         }
 
-        // Fetch meta-data for AI to resolve IDs
-        const [products, warehouses, suppliers, orders, transactions] = await Promise.all([
-            supabase.from('products').select('pid, p_name').limit(100),
-            supabase.from('warehouses').select('w_id, w_name').limit(20),
-            supabase.from('suppliers').select('sup_id, s_name').limit(20),
+        // Fetch meta-data for AI to resolve IDs and perform reasoning
+        const [products, warehouses, suppliers, orders, transactions, stockLevels] = await Promise.all([
+            supabase.from('products').select('pid, p_name, unit_price').limit(100),
+            supabase.from('warehouses').select('w_id, w_name, capacity').limit(20),
+            supabase.from('suppliers').select('sup_id, s_name, lead_time_days').limit(20),
             supabase.from('orders')
                 .select(`po_id, quantity, received_quantity, status, products(p_name), suppliers(s_name)`)
                 .neq('status', 'received')
                 .limit(50),
-            supabase.from('transactions').select('*').order('time', { ascending: false }).limit(20)
+            supabase.from('transactions').select('*').order('time', { ascending: false }).limit(20),
+            supabase.from('product_warehouse').select('pid, w_id, stock, min_stock').limit(100)
         ]);
 
         const metaContext = `
@@ -137,6 +149,7 @@ Available Warehouses: ${JSON.stringify(warehouses.data || [])}
 Available Suppliers: ${JSON.stringify(suppliers.data || [])}
 Active Orders (Partial/Pending): ${JSON.stringify(orders.data || [])}
 Recent Transactions: ${JSON.stringify(transactions.data || [])}
+Current Stock Levels: ${JSON.stringify(stockLevels.data || [])}
         `.trim();
 
         console.log("Processing with OpenRouter:", message, "Context:", userContext);
@@ -174,6 +187,35 @@ Recent Transactions: ${JSON.stringify(transactions.data || [])}
 
         try {
             const parsedData = JSON.parse(cleanText);
+
+            // Persistent Risk Auditing: If the AI flags this as High Risk, record it in our security table
+            if (parsedData.classification?.risk === 'high') {
+                try {
+                    const adminSupabase = createAdminClient(
+                        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                        process.env.SUPABASE_SERVICE_ROLE_KEY!
+                    );
+
+                    // Extract relevant metadata for auditing
+                    const exposure = parsedData.plan?.reduce((sum: number, p: any) => sum + ((p.params?.quantity || 0) * (p.params?.price || 0)), 0) || 0;
+
+                    await adminSupabase.from('risk_alerts').insert({
+                        trigger_message: message,
+                        risk_score: 95, // High risk default
+                        reason: parsedData.message || "High Capital Exposure Detected",
+                        status: 'open',
+                        metadata: {
+                            classification: parsedData.classification,
+                            exposure: exposure,
+                            plan: parsedData.plan,
+                            user_context: userContext
+                        }
+                    });
+                } catch (auditErr) {
+                    console.error("Failed to persist high-risk alert:", auditErr);
+                }
+            }
+
             return NextResponse.json(parsedData);
         } catch (e) {
             console.error("JSON Parse Error:", cleanText);
