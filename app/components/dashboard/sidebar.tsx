@@ -8,7 +8,6 @@ import {
     Package,
     ShoppingCart,
     Users,
-    Settings,
     GalleryVerticalEnd,
     LineChart,
     MessageSquare,
@@ -108,9 +107,6 @@ export function Sidebar({ role }: SidebarProps) {
                                 </NavItem>
                                 <NavItem href="/dashboard/admin/users" icon={Users}>
                                     User Management
-                                </NavItem>
-                                <NavItem href="/dashboard/settings" icon={Settings}>
-                                    Settings
                                 </NavItem>
                             </>
                         )}

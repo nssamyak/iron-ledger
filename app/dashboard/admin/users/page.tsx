@@ -127,6 +127,9 @@ export default function UserManagementPage() {
         if (!editingUser) return
         setUpdating(true)
 
+        const { data: { user: authUser } } = await supabase.auth.getUser()
+        if (!authUser) return
+
         try {
             // 1. Update Employee Record
             const { error: empError } = await supabase
@@ -164,10 +167,29 @@ export default function UserManagementPage() {
             }
 
             await fetchInitialData()
+
+            // 📖 LOG ADMIN COMMAND
+            await supabase.from('command_history').insert({
+                user_id: authUser.id,
+                command: `ADMIN: Updated identity for ${editingUser.f_name} ${editingUser.l_name} (Role: ${editingUser.app_role}, Dept ID: ${editingUser.d_id})`,
+                success: true,
+                result: { e_id: editingUser.e_id, status: 'committed' }
+            })
+
             setIsEditDialogOpen(false)
             setEditingUser(null)
             alert("Identity update committed successfully!")
         } catch (error: any) {
+            // 🏁 LOG FAILED COMMAND
+            const { data: { user: authUser } } = await supabase.auth.getUser()
+            if (authUser) {
+                await supabase.from('command_history').insert({
+                    user_id: authUser.id,
+                    command: `ADMIN: FAILED update for ${editingUser?.f_name}`,
+                    success: false,
+                    result: { error: error.message }
+                })
+            }
             alert("Update Failure: " + error.message)
         } finally {
             setUpdating(false)

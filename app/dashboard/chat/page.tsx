@@ -29,7 +29,7 @@ type Message = {
     explanation?: string
     previewData?: any
     requiresConfirmation?: boolean
-    intent?: "move" | "order" | "adjustment" | "receive" | "cancel" | "none"
+    intent?: "move" | "order" | "adjustment" | "receive" | "cancel" | "query" | "none"
     params?: any
 }
 
@@ -300,7 +300,7 @@ export default function ChatPage() {
                                 )}
                             </div>
 
-                            {m.intent && m.intent !== 'none' && (
+                            {m.intent && !['none', 'query'].includes(m.intent) && (
                                 <ActionForm
                                     message={m}
                                     products={products}
@@ -453,7 +453,9 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
     // Auto-update other fields when po_id changes for 'receive' intent
     useEffect(() => {
         if (message.intent === 'receive' && formState.po_id) {
-            const order = allOrders.find((o: any) => String(o.po_id) === String(formState.po_id));
+            // Robust matching: convert to Number to ignore leading zeros and 'PO-' prefix
+            const cleanPoId = Number(formState.po_id.replace(/\D/g, ''));
+            const order = allOrders.find((o: any) => Number(o.po_id) === cleanPoId);
             if (order) {
                 setFormState(prev => ({
                     ...prev,
@@ -492,7 +494,14 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                         <Select value={formState.po_id} onValueChange={(val: any) => setFormState(prev => ({ ...prev, po_id: String(val) }))}>
                             <SelectTrigger className="h-9 text-xs bg-background border-2">
                                 <SelectValue placeholder="Select Order">
-                                    {formState.po_id ? `PO-${formState.po_id.padStart(4, '0')} (${allOrders.find((o: any) => String(o.po_id) === String(formState.po_id))?.products?.p_name})` : "Select Order"}
+                                    {formState.po_id ?
+                                        (() => {
+                                            const cleanId = Number(formState.po_id.replace(/\D/g, ''));
+                                            const o = allOrders.find((o: any) => Number(o.po_id) === cleanId);
+                                            return o ? `PO-${String(o.po_id).padStart(4, '0')} (${o.products?.p_name})` : "Select Order";
+                                        })()
+                                        : "Select Order"
+                                    }
                                 </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
@@ -652,15 +661,14 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                             UPDATE products SET quantity = (SELECT SUM(stock) FROM product_warehouse WHERE pid = ${formState.pid}) WHERE pid = ${formState.pid};
                         `;
                     } else if (message.intent === 'order') {
-                        sql = `
-                            WITH new_po AS (
-                                INSERT INTO orders (p_id, sup_id, target_w_id, quantity, price, created_by, status)
-                                VALUES (${formState.pid}, ${formState.sup_id}, ${formState.target_w_id}, ${formState.quantity}, ${formState.price}, ${e_id}, 'pending'::order_status)
-                                RETURNING po_id
-                            )
-                            INSERT INTO bills (order_id, supplier_id, file_url, uploaded_by)
-                            VALUES ((SELECT po_id FROM new_po), ${formState.sup_id}, 'ATTACHED_BILL_URL', ${e_id});
-                        `;
+                        // Use Number() to ensure we don't pass empty strings to SQL
+                        const p = Number(formState.pid) || 0;
+                        const s = Number(formState.sup_id) || 0;
+                        const w = Number(formState.target_w_id) || 0;
+                        const q = Number(formState.quantity) || 0;
+                        const pr = Number(formState.price) || 0;
+
+                        sql = `INSERT INTO orders (p_id, sup_id, target_w_id, quantity, price, created_by, status) VALUES (${p}, ${s}, ${w}, ${q}, ${pr}, ${e_id}, 'pending'); INSERT INTO bills (order_id, supplier_id, file_url, uploaded_by) VALUES ((SELECT max(po_id) FROM orders), ${s}, 'ATTACHED_BILL_URL', ${e_id});`;
                     } else if (message.intent === 'receive') {
                         sql = `
                             UPDATE orders 
@@ -688,15 +696,15 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
                         // We use UPSERT on product_warehouse to ensure we don't break if row missing (though for negative adj it should exist)
                         // If negative, we decrease.
                         sql = `
-                            INSERT INTO product_warehouse (pid, w_id, stock)
-                            VALUES (${formState.pid}, ${formState.w_id}, ${qty})
-                            ON CONFLICT (pid, w_id) DO UPDATE SET stock = product_warehouse.stock + ${qty};
+            INSERT INTO product_warehouse (pid, w_id, stock)
+            VALUES (${formState.pid}, ${formState.w_id}, ${qty})
+            ON CONFLICT (pid, w_id) DO UPDATE SET stock = product_warehouse.stock + ${qty};
 
-                            INSERT INTO transactions (amt, type, pid, w_id, description, e_id)
-                            VALUES (${qty}, 'adjustment', ${formState.pid}, ${formState.w_id}, 'Adjustment via Chat: ${qty} units', ${e_id});
+            INSERT INTO transactions (amt, type, pid, w_id, description, e_id)
+            VALUES (${qty}, 'adjustment', ${formState.pid}, ${formState.w_id}, 'Adjustment via Chat: ${qty} units', ${e_id});
 
-                            UPDATE products SET quantity = (SELECT SUM(stock) FROM product_warehouse WHERE pid = ${formState.pid}) WHERE pid = ${formState.pid};
-                        `;
+            UPDATE products SET quantity = (SELECT SUM(stock) FROM product_warehouse WHERE pid = ${formState.pid}) WHERE pid = ${formState.pid};
+            `;
                     }
 
                     let customExplanation = `processed ${message.intent} for ${formState.quantity} units.`;
@@ -719,6 +727,6 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
             >
                 <Play className="h-4 w-4 mr-2" /> {message.intent === 'cancel' ? 'Confirm Cancellation' : 'Confirm & Execute Action'}
             </Button>
-        </div>
+        </div >
     );
 }

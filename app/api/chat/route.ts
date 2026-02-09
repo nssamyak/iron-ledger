@@ -7,8 +7,11 @@ Schema:
 - products(pid, p_name, unit_price)
 - warehouses(w_id, w_name)
 - suppliers(sup_id, s_name)
-- orders(po_id, quantity, received_quantity, status, p_id, target_w_id) -- status: 'pending', 'approved', 'ordered', 'shipped', 'received', 'cancelled', 'cancel_pending'
+- orders(po_id, quantity, received_quantity, status, p_id, target_w_id, created_by) -- status: 'pending', 'approved', 'ordered', 'shipped', 'received', 'cancelled', 'cancel_pending'
 - product_warehouse(pid, w_id, stock) -- Junction table linking products to warehouses with stock counts.
+- transactions(t_id, amt, type, pid, w_id, e_id, time, description) -- type: 'receive', 'transfer', 'adjustment'
+- employees(e_id, f_name, l_name, d_id)
+- departments(d_id, d_name)
 
 Operational Rules:
 1. Output Format: Return ONLY a JSON object: {
@@ -23,31 +26,23 @@ Operational Rules:
       "price": number | null 
     }, 
     "message": "Conversational human response",
-    "sql": "ONLY for intent='query'"
+    "sql": "ONLY for intent='query' - MUST be a valid SELECT statement"
   }.
 2. ID Resolution: Match names to IDs. 
-   - For 'receive', try to match the most relevant active order (po_id).
-   - For 'cancel', the user MUST providing or imply an order ID (po_id).
+    - Use ILIKE '%name%' for flexible matching in SQL.
+    - If user says "PO-123", extract 123 as 'po_id'.
 3. Intent Rules:
-   - 'receive': Used when a user mentions receiving stock from an existing order.
-   - 'cancel': Used when a user wants to cancel an order. 
-     - If role is 'admin', set status to 'cancelled'.
-     - If role is 'procurement_officer', set status to 'cancel_pending'.
-   - 'adjustment': Used for corrections, shrinkage, or SALES ("sold like 5 items"). 
-     - For "sold" or "used", use negative quantity (e.g., -5).
-     - For "found" or "added" (non-order), use positive quantity.
-   - 'query': SELECT queries. 
-     - Handle warehouse-specific questions (e.g. "how many X in alpha", "cost of products in alpha").
-     - Use ILIKE for flexible name matching.
-     - For "Total Cost/Valuation", calculate SUM(stock * unit_price).
-     - Always JOIN product_warehouse, products, and warehouses for location-based info.
-   - Others: Action forms.
+    - 'query': Use this for ANY "show", "list", "view", or data-related question.
+      - If user says "me", "my", "placed by me", "I created", etc., use "created_by = CUR_EMP_ID" in the WHERE clause.
+      - If user asks for "pending" items, filter by status = 'pending'.
+      - Joined queries are preferred for readability (e.g. join products for p_name).
+      - Example: "show my pending orders" -> SELECT * FROM orders WHERE created_by = CUR_EMP_ID AND status = 'pending';
+    - Action Intents (move, order, etc.): These will generate an interactive form. Use these ONLY when the user is clearly asking to PERFORM an action (e.g. "Order 50 X", "Move 10 Y from A to B").
 4. Access Control:
-   - If role is 'sales_representative', the ONLY allowed intents are 'query' and 'none'. 
-   - Deny ANY request from 'sales_representative' to move stock, create orders, adjust inventory, receive items, or cancel orders. 
-   - If User Context specifies an 'Assigned Warehouse ID' (w_id), they can ONLY operate on that warehouse as the source (w_id) or target (target_w_id).
-   - For denied actions, set intent to 'none' and explain that they do not have permission.
-5. Persona: Helpful human warehouse assistant.
+    - If role is 'sales_representative', the ONLY allowed intents are 'query' and 'none'.
+    - If User Context specifies an 'Assigned Warehouse ID' (w_id), restrict queries/actions to that warehouse.
+5. Placeholder: Use CUR_EMP_ID as a literal string in the SQL for the current user's employee ID.
+6. Persona: Helpful human warehouse assistant.
 `;
 
 
@@ -125,14 +120,15 @@ export async function POST(req: Request) {
         }
 
         // Fetch meta-data for AI to resolve IDs
-        const [products, warehouses, suppliers, orders] = await Promise.all([
+        const [products, warehouses, suppliers, orders, transactions] = await Promise.all([
             supabase.from('products').select('pid, p_name').limit(100),
             supabase.from('warehouses').select('w_id, w_name').limit(20),
             supabase.from('suppliers').select('sup_id, s_name').limit(20),
             supabase.from('orders')
                 .select(`po_id, quantity, received_quantity, status, products(p_name), suppliers(s_name)`)
                 .neq('status', 'received')
-                .limit(50)
+                .limit(50),
+            supabase.from('transactions').select('*').order('time', { ascending: false }).limit(20)
         ]);
 
         const metaContext = `
@@ -140,6 +136,7 @@ Available Products: ${JSON.stringify(products.data || [])}
 Available Warehouses: ${JSON.stringify(warehouses.data || [])}
 Available Suppliers: ${JSON.stringify(suppliers.data || [])}
 Active Orders (Partial/Pending): ${JSON.stringify(orders.data || [])}
+Recent Transactions: ${JSON.stringify(transactions.data || [])}
         `.trim();
 
         console.log("Processing with OpenRouter:", message, "Context:", userContext);
