@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { getServerRole } from "@/utils/roles";
 
 const SCHEMA_CONTEXT = `
 You are a PostgreSQL expert and Intelligent Logistics Architect for IronLedger.
@@ -22,6 +23,10 @@ Strategic Reasoning Rules:
    - Anomaly Detection: If the quantity seems like a typo (e.g. 10,000 instead of 10), flag it as a potential error.
    - Strategic Advice: In the 'message', advise on whether the expenditure is justifiable given current stock velocity and capacity. Don't just execute; audit.
 5. Intelligent Insights: Provide actionable advice in the 'message', explaining the 'why' behind your logistical suggestions.
+6. Pre-Flight Permission Protocol (DIRECT DENIAL): You MUST cross-reference the user's Role (found in 'userContext') with the 'Access Control' rules before setting any operational 'intent'.
+   - If a 'Sales Rep' requests ANY change (move, order, adjustment, etc.): You MUST set intent="none", classification.risk="high", system_checks.permissions.status="unauthorized". In 'message', DIRECTLY DENY the request, explaining that your security clearance is limited to system auditing and reporting. DO NOT generate parameters or plans.
+   - If 'Warehouse Staff' requests 'order' or 'cancel': You MUST set intent="none", classification.risk="high", system_checks.permissions.status="unauthorized". In 'message', DIRECTLY REFUSE the procurement request, stating it requires Management authorization.
+   - POLICY: If the Role lacks authority, the only acceptable output is 'intent': 'none' with a refusal message.
 
 Output Format: Return ONLY a JSON object: {
     "intent": "plan" | "move" | "order" | "adjustment" | "receive" | "cancel" | "query" | "none", 
@@ -52,7 +57,11 @@ Output Format: Return ONLY a JSON object: {
   }.
 
 ID Resolution: Match names to IDs using the provided context. Use ILIKE '%name%' in SQL.
-Access Control: Admin (Full), Manager (Assigned Warehouse), Sales Rep (READ-ONLY).
+Access Control: 
+- Admin: Unlimited operational authority.
+- Manager: Full logistics and procurement oversight.
+- Warehouse Staff: Restricted to logistics execution (move, receive, adjustment). CANNOT execute orders or cancellations.
+- Sales Rep: READ-ONLY access to ALL tables (including Orders/Transactions). STRICTLY FORBIDDEN from creating or modifying data (No INSERT/UPDATE/DELETE).
 Persona: Proactive, strategic logistics architect.
 `;
 
@@ -78,43 +87,25 @@ export async function POST(req: Request) {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
+        let role = 'guest';
         let userContext = "Current User: Guest";
         if (user) {
-            // 1. Get mapping from user_roles
-            const { data: urData } = await supabase.from('user_roles').select('*').eq('user_id', user.id).maybeSingle();
-            const empIdFromUR = (urData as any)?.emp_id;
+            role = await getServerRole(supabase, user.id);
 
-            // 2. Get employee record
+            // Get employee record for context
+            const { data: urData } = await supabase.from('user_roles').select('emp_id').eq('user_id', user.id).maybeSingle();
+            const empId = urData?.emp_id;
+
             let empData = null;
-            if (empIdFromUR) {
-                const { data: e } = await supabase.from('employees').select('e_id, f_name, role_id').eq('e_id', empIdFromUR).maybeSingle();
-
-
+            if (empId) {
+                const { data: e } = await supabase.from('employees').select('e_id, f_name').eq('e_id', empId).maybeSingle();
                 empData = e;
             } else {
-                const { data: e } = await supabase.from('employees').select('e_id, f_name, role_id').eq('user_id', user.id).maybeSingle();
-
-
+                const { data: e } = await supabase.from('employees').select('e_id, f_name').eq('user_id', user.id).maybeSingle();
                 empData = e;
             }
 
             if (empData) {
-                // 3. Resolve role name
-                let dbRoleName = null;
-                if (empData.role_id) {
-                    const { data: roleRec } = await supabase.from('roles').select('role_name').eq('role_id', empData.role_id).maybeSingle();
-                    dbRoleName = roleRec?.role_name;
-                }
-
-                let role = 'warehouse_staff';
-                if (dbRoleName === 'Administrator') {
-                    role = 'admin';
-                } else if (dbRoleName === 'Warehouse Manager') {
-                    role = 'manager';
-                } else if (dbRoleName) {
-                    role = dbRoleName.toLowerCase().replace(/ /g, '_');
-                }
-
                 userContext = `Current User Employee ID: ${empData.e_id}, Name: ${empData.f_name}, Role: ${role}`;
 
                 // Check if they manage a warehouse
@@ -131,6 +122,7 @@ export async function POST(req: Request) {
         }
 
         // Fetch meta-data for AI to resolve IDs and perform reasoning
+        // SECURITY: Context is allowed for Sales Reps to answer queries, but ACTIONS are blocked below.
         const [products, warehouses, suppliers, orders, transactions, stockLevels] = await Promise.all([
             supabase.from('products').select('pid, p_name, unit_price').limit(100),
             supabase.from('warehouses').select('w_id, w_name, capacity').limit(20),
@@ -188,8 +180,44 @@ Current Stock Levels: ${JSON.stringify(stockLevels.data || [])}
         try {
             const parsedData = JSON.parse(cleanText);
 
+            // --- Hard-Locked Backend Intent Interceptor ---
+            // Even if the AI hallucinated an action, the backend will strip it if permissions fail.
+            const intent = parsedData.intent;
+            const isPurchaseIntent = (intent === 'order' || intent === 'cancel' || (intent === 'plan' && parsedData.plan?.[0]?.intent === 'order'));
+
+            if (role === 'sales_representative') {
+                const isManipulationSql = parsedData.sql && /^(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|TRUNCATE)/i.test(parsedData.sql.trim());
+
+                // For Sales Reps: Only allow Queries. Block all manipulation or plans.
+                // We do NOT block specific tables anymore (they can view orders), just actions.
+                const forbidden = /order|purchase|procure|buy|sell|move|transfer|receive|cancel|adjust|ship|delete|update|insert|coordinate|split|optimize/i.test(message);
+                const isQuery = intent === 'query' || (!intent && !parsedData.plan && !parsedData.sql);
+                const hasOperationalPlan = parsedData.plan?.some((p: any) => p.intent && p.intent !== 'query');
+
+                // If not a clear query, or contains manipulation, or triggers operational flags
+                if (!isQuery || isManipulationSql || hasOperationalPlan || parsedData.is_split_suggestion || (forbidden && intent !== 'query')) {
+                    parsedData.intent = 'none';
+                    parsedData.plan = [];
+                    parsedData.sql = null;
+                    parsedData.is_split_suggestion = false;
+                    parsedData.classification = { ...parsedData.classification, risk: 'high', intent_type: 'view' };
+                    parsedData.message = "NOT VALID: Access Denied. Your Sales Representative account is restricted to read-only access. I cannot perform or plan this action.";
+                    // Strip system_checks to prevent "analytics" from showing
+                    delete parsedData.system_checks;
+                }
+            }
+            else if (role === 'warehouse_staff') {
+                // Warehouse Staff cannot perform procurement (order/cancel)
+                if (isPurchaseIntent) {
+                    parsedData.intent = 'none';
+                    parsedData.plan = [];
+                    parsedData.message = "DIRECT REFUSAL: Procurement and Order Cancellation are restricted to Management. Your Warehouse Staff role lacks the necessary authorization.";
+                    parsedData.system_checks = { ...parsedData.system_checks, permissions: { status: 'unauthorized', message: 'Procurement restriction.' } };
+                }
+            }
+
             // Persistent Risk Auditing: If the AI flags this as High Risk, record it in our security table
-            if (parsedData.classification?.risk === 'high') {
+            if (parsedData.classification?.risk === 'high' || !['none', 'query'].includes(parsedData.intent)) {
                 try {
                     const adminSupabase = createAdminClient(
                         process.env.NEXT_PUBLIC_SUPABASE_URL!,

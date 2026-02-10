@@ -1,6 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/app/components/ui/card"
 import { createClient } from "@/utils/supabase/server"
 import { IndianRupee, ShoppingCart, AlertTriangle, TrendingUp } from "lucide-react"
+import { TopProductsChart, TopWarehousesChart, ProductQuantityChart, WarehouseTransactionsChart } from "@/app/components/dashboard/charts"
 
 export default async function DashboardPage() {
     const supabase = await createClient()
@@ -32,6 +33,58 @@ export default async function DashboardPage() {
         .select('t_id, time, amt, type, products(p_name)')
         .order('time', { ascending: false })
         .limit(5)
+
+    // Fetch top products by revenue (from orders)
+    const { data: topProductsData } = await supabase
+        .from('orders')
+        .select('quantity, price, products(p_name)')
+        .in('status', ['received', 'shipped', 'ordered'])
+
+    // Fetch warehouse inventory values
+    const { data: warehouseData } = await supabase
+        .from('product_warehouse')
+        .select('stock, w_id, warehouses(w_name), products(unit_price)')
+
+    // Fetch warehouse transaction counts
+    const { data: warehouseTransactions } = await supabase
+        .from('transactions')
+        .select('w_id, warehouses(w_name)')
+
+    // Process top products data
+    const productRevenueMap = new Map<string, { revenue: number; quantity: number }>()
+    topProductsData?.forEach((order: any) => {
+        const productName = order.products?.p_name || 'Unknown'
+        const existing = productRevenueMap.get(productName) || { revenue: 0, quantity: 0 }
+        productRevenueMap.set(productName, {
+            revenue: existing.revenue + (Number(order.price) || 0),
+            quantity: existing.quantity + (order.quantity || 0)
+        })
+    })
+    const topProducts = Array.from(productRevenueMap.entries())
+        .map(([name, data]) => ({ name, ...data }))
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 6)
+
+    // Process warehouse inventory values
+    const warehouseValueMap = new Map<string, number>()
+    warehouseData?.forEach((pw: any) => {
+        const warehouseName = pw.warehouses?.w_name || 'Unknown'
+        const value = (pw.stock || 0) * (Number(pw.products?.unit_price) || 0)
+        warehouseValueMap.set(warehouseName, (warehouseValueMap.get(warehouseName) || 0) + value)
+    })
+    const topWarehouses = Array.from(warehouseValueMap.entries())
+        .map(([name, value]) => ({ name, value, transactions: 0 }))
+        .sort((a, b) => b.value - a.value)
+
+    // Add transaction counts to warehouses
+    const warehouseTransactionCount = new Map<string, number>()
+    warehouseTransactions?.forEach((txn: any) => {
+        const warehouseName = txn.warehouses?.w_name || 'Unknown'
+        warehouseTransactionCount.set(warehouseName, (warehouseTransactionCount.get(warehouseName) || 0) + 1)
+    })
+    topWarehouses.forEach(wh => {
+        wh.transactions = warehouseTransactionCount.get(wh.name) || 0
+    })
 
     // Calculate Dynamic Stats
     let lowStockCount = 0
@@ -125,6 +178,22 @@ export default async function DashboardPage() {
                     </CardContent>
                 </Card>
             </div>
+
+            {/* Performance Charts - Hidden for Sales Representatives */}
+            {userRole !== 'sales_representative' && (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+                    <TopProductsChart data={topProducts} />
+                    <TopWarehousesChart data={topWarehouses} />
+                </div>
+            )}
+
+            {/* Secondary Charts */}
+            {userRole !== 'sales_representative' && topProducts.length > 0 && (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+                    <ProductQuantityChart data={topProducts} />
+                    <WarehouseTransactionsChart data={topWarehouses} />
+                </div>
+            )}
 
             <div className={`grid gap-4 ${userRole === 'sales_representative' ? 'grid-cols-1' : 'md:grid-cols-2 lg:grid-cols-7'}`}>
                 {userRole !== 'sales_representative' && (

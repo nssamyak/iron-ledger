@@ -22,6 +22,7 @@ import {
     SelectValue
 } from "../../components/ui/select"
 import { Badge } from "@/app/components/ui/badge"
+import { normalizeRole } from "@/utils/roles"
 
 type PlanItem = {
     intent: "move" | "order" | "adjustment" | "receive" | "cancel" | "query"
@@ -73,7 +74,7 @@ export default function ChatPage() {
     const [stockLevels, setStockLevels] = useState<any[]>([])
     const [employeeId, setEmployeeId] = useState<string | null>(null)
     const [employeeWId, setEmployeeWId] = useState<string | null>(null)
-    const [userRole, setUserRole] = useState<string>('warehouse_staff')
+    const [userRole, setUserRole] = useState<string>('sales_representative')
 
     // Bill Upload State
     const [isBillModalOpen, setIsBillModalOpen] = useState(false)
@@ -126,12 +127,7 @@ export default function ChatPage() {
                 if (emp.role_id) {
                     const { data: roleData } = await supabase.from('roles').select('role_name').eq('role_id', emp.role_id).single()
                     if (roleData) {
-                        const dbRoleName = roleData.role_name
-                        let role = 'warehouse_staff'
-                        if (dbRoleName === 'Administrator') role = 'admin'
-                        else if (dbRoleName === 'Warehouse Manager') role = 'manager'
-                        else if (dbRoleName === 'Procurement Officer') role = 'procurement_officer'
-                        setUserRole(role)
+                        setUserRole(normalizeRole(roleData.role_name))
                     }
                 }
             }
@@ -440,6 +436,7 @@ export default function ChatPage() {
                                             warehouses={warehouses}
                                             suppliers={suppliers}
                                             stockLevels={stockLevels}
+                                            userRole={userRole}
                                             handleConfirm={handleConfirm}
                                         />
                                     ) : (
@@ -675,6 +672,16 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
     const getProductName = (id: any) => products.find((p: any) => String(p.pid) === String(id))?.p_name || "Select Product";
     const getWarehouseName = (id: any) => warehouses.find((w: any) => String(w.w_id) === String(id))?.w_name || "Select Warehouse";
     const getSupplierName = (id: any) => suppliers.find((s: any) => String(s.sup_id) === String(id))?.s_name || "Select Supplier";
+
+    const isAuthorized = () => {
+        if (userRole === 'sales_representative') return false; // READ-ONLY
+        if (message.intent === 'order' || message.intent === 'cancel') {
+            return userRole === 'admin' || userRole === 'manager';
+        }
+        return true;
+    };
+
+    if (!isAuthorized()) return null;
 
     return (
         <div className="mt-4 p-4 border rounded-xl bg-background/50 backdrop-blur-sm space-y-4 min-w-[300px] border-primary/10">
@@ -964,7 +971,18 @@ function ActionForm({ message, products, warehouses, suppliers, allOrders, emplo
     );
 }
 
-function BulkPlanForm({ message, products, warehouses, suppliers, stockLevels, handleConfirm }: any) {
+function BulkPlanForm({ message, products, warehouses, suppliers, stockLevels, userRole, handleConfirm }: any) {
+    const isAuthorized = () => {
+        if (userRole === 'sales_representative') return false; // READ-ONLY
+        // Many plans involve 'order' splits
+        if (message.plan?.[0]?.intent === 'order') {
+            return userRole === 'admin' || userRole === 'manager';
+        }
+        return true;
+    };
+
+    if (!isAuthorized()) return null;
+
     const defaultSplits = message.plan?.map((p: any) => ({
         target_w_id: (p.params?.target_w_id || p.params?.w_id) ? String(p.params?.target_w_id || p.params?.w_id) : "",
         quantity: Number(p.params?.quantity) || 0,
